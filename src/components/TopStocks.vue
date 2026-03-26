@@ -14,15 +14,35 @@ const progress = ref(0)
 const results  = ref([])
 const error    = ref('')
 
+const FALLBACK_STOCKS = [
+  'AAPL','MSFT','NVDA','GOOGL','AMZN',
+  'META','TSLA','V','JPM','UNH',
+  'MA','HD','PG','JNJ','WMT',
+  'NFLX','DIS','PYPL','BAC','AMD',
+  'INTC','CSCO','CRM','ORCL','ADBE',
+  'QCOM','TXN','AVGO','MU','SHOP',
+]
+
 async function fetchStockList() {
-  const url   = `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=${activeScreener.value.id}&count=40`
-  const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
-  const data  = await (await fetch(proxy)).json()
+  // 嘗試多個 endpoint
+  const endpoints = [
+    `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=${activeScreener.value.id}&count=40&region=US&lang=en-US`,
+    `https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=${activeScreener.value.id}&count=40&region=US&lang=en-US`,
+  ]
 
-  const quotes = data?.finance?.result?.[0]?.quotes
-  if (!quotes?.length) throw new Error('無法取得股票清單')
+  for (const url of endpoints) {
+    try {
+      const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
+      const data  = await (await fetch(proxy)).json()
+      const quotes = data?.finance?.result?.[0]?.quotes
+      if (quotes?.length) return quotes.map(q => q.symbol).filter(Boolean)
+    } catch {
+      // 試下一個
+    }
+  }
 
-  return quotes.map(q => q.symbol).filter(Boolean)
+  // 全部失敗用備用清單
+  return FALLBACK_STOCKS
 }
 
 async function analyze() {
