@@ -93,7 +93,7 @@ async function loadCandles(sym) {
   try {
     const { interval, range } = activeRes.value
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=${interval}&range=${range}`
-    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`
 
     const data = await fetchJSON(proxyUrl)
     const r    = data?.chart?.result?.[0]

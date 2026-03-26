@@ -32,7 +32,7 @@ async function fetchStockList() {
 
   for (const url of endpoints) {
     try {
-      const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
+      const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
       const data  = await (await fetch(proxy)).json()
       const quotes = data?.finance?.result?.[0]?.quotes
       if (quotes?.length) return quotes.map(q => q.symbol).filter(Boolean)
@@ -60,7 +60,7 @@ async function analyze() {
       await Promise.all(batch.map(async (sym) => {
         try {
           const url   = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=3mo`
-          const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
+          const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
           const data  = await (await fetch(proxy)).json()
 
           const r = data?.chart?.result?.[0]
