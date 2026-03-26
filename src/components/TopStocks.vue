@@ -2,19 +2,28 @@
 import { ref } from 'vue'
 import { scoreStock } from '../utils/technical.js'
 
-const STOCKS = [
-  'AAPL','MSFT','NVDA','GOOGL','AMZN',
-  'META','TSLA','V','JPM','UNH',
-  'MA','HD','PG','JNJ','WMT',
-  'NFLX','DIS','PYPL','BAC','AMD',
-  'INTC','CSCO','CRM','ORCL','ADBE',
-  'QCOM','TXN','AVGO','MU','SHOP',
+const SCREENERS = [
+  { id: 'most_actives', label: '成交量最大' },
+  { id: 'day_gainers',  label: '今日漲幅最大' },
+  { id: 'day_losers',   label: '今日跌幅最大' },
 ]
+const activeScreener = ref(SCREENERS[0])
 
 const loading  = ref(false)
 const progress = ref(0)
 const results  = ref([])
 const error    = ref('')
+
+async function fetchStockList() {
+  const url   = `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=${activeScreener.value.id}&count=40`
+  const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
+  const data  = await (await fetch(proxy)).json()
+
+  const quotes = data?.finance?.result?.[0]?.quotes
+  if (!quotes?.length) throw new Error('無法取得股票清單')
+
+  return quotes.map(q => q.symbol).filter(Boolean)
+}
 
 async function analyze() {
   loading.value  = true
@@ -22,47 +31,55 @@ async function analyze() {
   results.value  = []
   error.value    = ''
 
-  const scored = []
+  try {
+    const stocks = await fetchStockList()
+    const scored = []
 
-  // 分批抓，每批 5 支，避免 proxy 限流
-  for (let i = 0; i < STOCKS.length; i += 5) {
-    const batch = STOCKS.slice(i, i + 5)
-    await Promise.all(batch.map(async (sym) => {
-      try {
-        const url   = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=3mo`
-        const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
-        const res   = await fetch(proxy)
-        const data  = await res.json()
+    for (let i = 0; i < stocks.length; i += 5) {
+      const batch = stocks.slice(i, i + 5)
+      await Promise.all(batch.map(async (sym) => {
+        try {
+          const url   = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=3mo`
+          const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
+          const data  = await (await fetch(proxy)).json()
 
-        const r = data?.chart?.result?.[0]
-        if (!r) return
+          const r = data?.chart?.result?.[0]
+          if (!r) return
 
-        const closes = r.indicators.quote[0].close.filter(Boolean)
-        const result = scoreStock(closes)
-        if (!result) return
+          const closes = r.indicators.quote[0].close.filter(Boolean)
+          const result = scoreStock(closes)
+          if (!result) return
 
-        scored.push({
-          symbol:   sym,
-          price:    closes[closes.length - 1].toFixed(2),
-          ...result,
-        })
-      } catch {
-        // 單支失敗不中斷整體
-      }
-    }))
+          scored.push({
+            symbol:  sym,
+            price:   closes[closes.length - 1].toFixed(2),
+            ...result,
+          })
+        } catch {
+          // 單支失敗不中斷
+        }
+      }))
 
-    progress.value = Math.min(Math.round(((i + 5) / STOCKS.length) * 100), 100)
+      progress.value = Math.min(Math.round(((i + 5) / stocks.length) * 100), 100)
+    }
+
+    if (!scored.length) {
+      error.value = '分析失敗，請稍後再試。'
+    } else {
+      results.value = scored
+        .sort((a, b) => b.score - a.score || b.monthRet - a.monthRet)
+        .slice(0, 10)
+    }
+  } catch (e) {
+    error.value = '取得清單失敗：' + e.message
+  } finally {
+    loading.value = false
   }
+}
 
-  if (scored.length === 0) {
-    error.value = '分析失敗，請稍後再試。'
-  } else {
-    results.value = scored
-      .sort((a, b) => b.score - a.score || b.monthRet - a.monthRet)
-      .slice(0, 10)
-  }
-
-  loading.value = false
+async function switchScreener(s) {
+  activeScreener.value = s
+  await analyze()
 }
 
 function retClass(val) {
@@ -78,11 +95,24 @@ function scoreColor(score) {
 
 <template>
   <div>
+    <!-- Screener Tabs -->
+    <div class="flex gap-1 mb-6 bg-[#1a1d27] border border-gray-800 rounded-lg p-1 w-fit">
+      <button
+        v-for="s in SCREENERS"
+        :key="s.id"
+        @click="!loading && switchScreener(s)"
+        :class="activeScreener.id === s.id ? 'bg-blue-500 text-white' : 'text-gray-500 hover:text-gray-300'"
+        class="text-xs font-semibold px-3 py-1.5 rounded-md transition-colors cursor-pointer"
+      >
+        {{ s.label }}
+      </button>
+    </div>
+
     <!-- Start Button -->
-    <div v-if="!loading && results.length === 0" class="text-center py-10">
+    <div v-if="!loading && results.length === 0 && !error" class="text-center py-10">
       <p class="text-gray-500 text-sm mb-5">
-        分析 {{ STOCKS.length }} 支熱門美股的 3 個月技術指標<br/>
-        （MA、RSI、MACD）找出最強勢的前 10 名
+        動態從 Yahoo Finance 抓取「{{ activeScreener.label }}」清單<br/>
+        計算 3 個月技術指標（MA、RSI、MACD）找出前 10 名
       </p>
       <button
         @click="analyze"
@@ -125,10 +155,8 @@ function scoreColor(score) {
         :key="stock.symbol"
         class="bg-[#1a1d27] border border-gray-800 rounded-xl px-5 py-4 flex items-center gap-4"
       >
-        <!-- Rank -->
         <span class="text-gray-600 text-sm font-bold w-5 shrink-0">{{ idx + 1 }}</span>
 
-        <!-- Symbol & Signals -->
         <div class="flex-1 min-w-0">
           <span class="text-white font-bold text-base">{{ stock.symbol }}</span>
           <div class="flex flex-wrap gap-1 mt-1.5">
@@ -142,7 +170,6 @@ function scoreColor(score) {
           </div>
         </div>
 
-        <!-- Price & Return -->
         <div class="text-right shrink-0">
           <p class="text-white text-sm font-semibold">${{ stock.price }}</p>
           <p :class="retClass(stock.monthRet)" class="text-xs mt-0.5">
@@ -150,7 +177,6 @@ function scoreColor(score) {
           </p>
         </div>
 
-        <!-- Score -->
         <div class="shrink-0 text-right w-12">
           <span :class="scoreColor(stock.score)" class="text-xl font-bold">{{ stock.score }}</span>
           <p class="text-gray-600 text-xs">/ 10</p>
