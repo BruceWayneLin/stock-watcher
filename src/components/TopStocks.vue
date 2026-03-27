@@ -83,7 +83,7 @@ async function analyze() {
       }))
 
       progress.value = Math.min(Math.round(((i + 3) / limited.length) * 100), 100)
-      if (i + 3 < limited.length) await new Promise(r => setTimeout(r, 800))
+      if (i + 3 < limited.length) await new Promise(r => setTimeout(r, 1500))
     }
 
     if (!scored.length) {
