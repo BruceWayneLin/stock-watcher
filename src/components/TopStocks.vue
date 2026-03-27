@@ -55,8 +55,10 @@ async function analyze() {
     const stocks = await fetchStockList()
     const scored = []
 
-    for (let i = 0; i < stocks.length; i += 5) {
-      const batch = stocks.slice(i, i + 5)
+    // 每批 3 支，批次間等 800ms，避免 429
+    const limited = stocks.slice(0, 20)
+    for (let i = 0; i < limited.length; i += 3) {
+      const batch = limited.slice(i, i + 3)
       await Promise.all(batch.map(async (sym) => {
         try {
           const url   = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=3mo`
@@ -80,7 +82,8 @@ async function analyze() {
         }
       }))
 
-      progress.value = Math.min(Math.round(((i + 5) / stocks.length) * 100), 100)
+      progress.value = Math.min(Math.round(((i + 3) / limited.length) * 100), 100)
+      if (i + 3 < limited.length) await new Promise(r => setTimeout(r, 800))
     }
 
     if (!scored.length) {
