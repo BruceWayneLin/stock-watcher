@@ -128,13 +128,57 @@ function fmt(n) {
   <div class="min-h-screen flex items-start justify-center px-4 py-12">
     <div class="w-full max-w-2xl">
 
-      <div class="flex items-center gap-3 mb-6">
+      <div class="flex items-center gap-3 mb-4">
         <span class="text-3xl">🐔</span>
         <div>
           <h1 class="text-white text-2xl font-bold tracking-tight">小雞分析</h1>
-          <p class="text-gray-600 text-xs">技術面回測 · 當日漲跌預測</p>
+          <p class="text-gray-600 text-xs">技術面回測 · 當日漲跌預測 · 當沖交易建議</p>
         </div>
       </div>
+
+      <!-- 技術分析說明 -->
+      <details class="mb-6 bg-[#1a1d27] border border-gray-800 rounded-xl overflow-hidden">
+        <summary class="px-4 py-3 text-gray-400 text-xs font-semibold cursor-pointer hover:text-gray-300 transition-colors select-none flex items-center gap-2">
+          <span class="text-sm">📊</span> 系統使用的技術分析指標說明
+          <span class="text-gray-600 text-[10px] ml-auto">點擊展開</span>
+        </summary>
+        <div class="px-4 pb-4 pt-1 border-t border-gray-800/50">
+
+          <!-- 小雞預測 -->
+          <p class="text-blue-400 text-xs font-semibold mt-3 mb-2">🐔 小雞預測（漲跌機率）</p>
+          <p class="text-gray-500 text-[11px] mb-2 leading-relaxed">
+            從半年歷史日線中，找出技術面相似度 ≥ 70% 的交易日，以加權統計隔天漲跌比例得出機率。
+          </p>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-4">
+            <div class="flex justify-between"><span class="text-gray-500">MA10 / MA20 / MA50</span><span class="text-gray-400">趨勢方向判斷</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">RSI(14)</span><span class="text-gray-400">超買超賣分區</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">MACD(12,26,9)</span><span class="text-gray-400">多空動能</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">布林通道(20,2σ)</span><span class="text-gray-400">價格通道位置</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">3日 / 5日動量</span><span class="text-gray-400">短期力道</span></div>
+          </div>
+
+          <!-- 當沖交易建議 -->
+          <p class="text-blue-400 text-xs font-semibold mb-2">🐔 當沖交易價位計算</p>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-3">
+            <div class="flex justify-between"><span class="text-gray-500">Pivot Points</span><span class="text-gray-400">前日 H/L/C → S1/R1</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">布林通道</span><span class="text-gray-400">超買超賣邊界</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">ATR(14)</span><span class="text-gray-400">波動度 · 停損距離</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">5日高低點</span><span class="text-gray-400">短期支撐壓力</span></div>
+          </div>
+
+          <!-- 公式 -->
+          <p class="text-blue-400 text-xs font-semibold mb-2">計算公式</p>
+          <div class="space-y-1 text-[10px] font-mono">
+            <p class="text-emerald-400/80">▲ 做多：買進 = max(S1, BB下軌, 現價−0.5×ATR)　賣出 = min(R1, BB上軌, 現價+1.2×ATR)</p>
+            <p class="text-red-400/80">▼ 賣空：賣空 = min(R1, BB上軌, 現價+0.5×ATR)　買回 = max(S1, BB下軌, 現價−1.2×ATR)</p>
+            <p class="text-gray-600">停損 = 進場價 ± 0.5×ATR</p>
+          </div>
+
+          <p class="text-gray-700 text-[10px] mt-3">
+            資料來源：Twelve Data 6 個月日線 · Finnhub 即時報價
+          </p>
+        </div>
+      </details>
 
       <!-- 缺 Key 提示 -->
       <div v-if="needKey" class="bg-yellow-950/50 border border-yellow-800/50 text-yellow-400 text-sm px-4 py-3 rounded-lg mb-4">
