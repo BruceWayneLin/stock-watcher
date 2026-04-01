@@ -7,48 +7,45 @@ export default {
       return new Response('Missing url parameter', { status: 400 })
     }
 
+    const corsHeaders = {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    }
+
     // 先查 Cloudflare edge cache
     const cache    = caches.default
     const cacheKey = new Request(target)
     const cached   = await cache.match(cacheKey)
     if (cached) {
       const body = await cached.text()
-      return new Response(body, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      })
+      return new Response(body, { headers: corsHeaders })
     }
 
-    // 最多 retry 3 次（429 時等待後重試）
+    // 最多 retry 5 次（429 時指數退避）
     let res
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
       res = await fetch(target, {
         headers: { 'Accept': 'application/json' },
       })
       if (res.status !== 429) break
-      await new Promise(r => setTimeout(r, 1000 * (i + 1)))
+      // 3s, 6s, 12s, 24s 退避
+      await new Promise(r => setTimeout(r, 3000 * Math.pow(2, i)))
     }
 
     const body = await res.text()
 
     const response = new Response(body, {
       status: res.status,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: corsHeaders,
     })
 
-    // 成功才快取，TTL 15 分鐘
+    // 成功才快取，TTL 30 分鐘
     if (res.status === 200) {
-      const toCache = response.clone()
       ctx.waitUntil(
         cache.put(cacheKey, new Response(body, {
           headers: {
             'Content-Type': 'application/json',
-            'Cache-Control': 'max-age=900',
+            'Cache-Control': 'max-age=1800',
           },
         }))
       )
