@@ -24,7 +24,16 @@
       "Bash(curl -s \"https://corsproxy.io/?https%3A%2F%2Fquery1.finance.yahoo.com%2Fv8%2Ffinance%2Fchart%2FAAPL%3Finterval%3D1d%26range%3D6mo\")",
       "Bash(curl -s --max-time 8 \"https://api.allorigins.win/get?url=https%3A%2F%2Fquery1.finance.yahoo.com%2Fv8%2Ffinance%2Fchart%2FAAPL%3Finterval%3D1d%26range%3D6mo\")",
       "Bash(curl -s \"https://api.twelvedata.com/time_series?symbol=TSLA&interval=1day&outputsize=5&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")",
-      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(''''OK'''' if d.get\\(''''values''''\\) else d\\)\")"
+      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(''''OK'''' if d.get\\(''''values''''\\) else d\\)\")",
+      "WebFetch(domain:twelvedata.com)",
+      "WebFetch(domain:finnhub.io)",
+      "WebSearch",
+      "Bash(curl -s \"https://api.twelvedata.com/quote?symbol=005930&exchange=KRX&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s \"https://api.twelvedata.com/stocks?exchange=KRX&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('status','ok'\\)\\); [print\\(s\\) for s in \\(d.get\\('data'\\) or []\\)[:5]]\")",
+      "Bash(curl -s \"https://api.twelvedata.com/quote?symbol=2330&exchange=TWSE&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")",
+      "Bash(curl -s \"https://api.twelvedata.com/quote?symbol=7203&exchange=TSE&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")"
     ]
   }
 }

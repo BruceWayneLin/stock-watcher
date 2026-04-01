@@ -17,6 +17,7 @@ const FINNHUB = 'https://finnhub.io/api/v1'
 const TWELVE  = 'https://api.twelvedata.com'
 
 const symbol     = ref('')
+const market     = ref('US')
 const loading    = ref(false)
 const error      = ref('')
 const result     = ref(null)
@@ -24,11 +25,26 @@ const candleData = ref([])
 const taData     = ref(null)
 const prediction = ref(null)
 
+const MARKETS = {
+  US:  { label: '🇺🇸 美股', currency: '$',  exchange: '',     placeholder: '例如 AAPL、TSLA' },
+  TW:  { label: '🇹🇼 台股', currency: 'NT$', exchange: 'TWSE', placeholder: '例如 2330、2603' },
+  JP:  { label: '🇯🇵 日股', currency: '¥',   exchange: 'TSE',  placeholder: '例如 7203、6758' },
+  KR:  { label: '🇰🇷 韓股', currency: '₩',   exchange: 'KRX',  placeholder: '例如 005930' },
+}
+
+const currentMarket = computed(() => MARKETS[market.value])
+
 const needKey = computed(() => !TWELVE_KEY)
 
 const changeClass = computed(() =>
   result.value?.isUp ? 'text-emerald-400' : 'text-red-400'
 )
+
+// 組合 Twelve Data 用的 symbol 參數
+function twelveSymbol(sym) {
+  const mkt = MARKETS[market.value]
+  return mkt.exchange ? `${sym}&exchange=${mkt.exchange}` : sym
+}
 
 async function search() {
   const sym = symbol.value.trim().toUpperCase()
@@ -45,33 +61,72 @@ async function search() {
   taData.value     = null
   prediction.value = null
 
+  const mkt = MARKETS[market.value]
+  const cur = mkt.currency
+
   try {
-    // Finnhub 即時報價 + 公司資料
-    const [quote, profile] = await Promise.all([
-      cachedFetch(`${FINNHUB}/quote?symbol=${sym}&token=${FINNHUB_KEY}`, 2 * 60 * 1000),
-      cachedFetch(`${FINNHUB}/stock/profile2?symbol=${sym}&token=${FINNHUB_KEY}`, 30 * 60 * 1000),
-    ])
+    if (market.value === 'US') {
+      // 美股：Finnhub 即時報價 + 公司資料
+      const [quote, profile] = await Promise.all([
+        cachedFetch(`${FINNHUB}/quote?symbol=${sym}&token=${FINNHUB_KEY}`, 2 * 60 * 1000),
+        cachedFetch(`${FINNHUB}/stock/profile2?symbol=${sym}&token=${FINNHUB_KEY}`, 30 * 60 * 1000),
+      ])
 
-    if (!quote.c) {
-      error.value = `找不到股票代號「${sym}」，請確認代號是否正確。`
-      return
-    }
+      if (!quote.c) {
+        error.value = `找不到股票代號「${sym}」，請確認代號是否正確。`
+        return
+      }
 
-    const isUp = quote.d >= 0
-    result.value = {
-      symbol: sym,
-      name:   profile.name || '—',
-      price:  fmt(quote.c),
-      change: fmt(Math.abs(quote.d)),
-      changePct: Math.abs(quote.dp).toFixed(2),
-      changeSign: isUp ? '▲ +' : '▼ -',
-      isUp,
-      meta: [
-        { label: '開盤', value: fmt(quote.o)  },
-        { label: '最高', value: fmt(quote.h)  },
-        { label: '最低', value: fmt(quote.l)  },
-        { label: '昨收', value: fmt(quote.pc) },
-      ],
+      const isUp = quote.d >= 0
+      result.value = {
+        symbol: sym, currency: cur,
+        name:   profile.name || '—',
+        price:  fmt(quote.c),
+        change: fmt(Math.abs(quote.d)),
+        changePct: Math.abs(quote.dp).toFixed(2),
+        changeSign: isUp ? '▲ +' : '▼ -',
+        isUp,
+        meta: [
+          { label: '開盤', value: fmt(quote.o)  },
+          { label: '最高', value: fmt(quote.h)  },
+          { label: '最低', value: fmt(quote.l)  },
+          { label: '昨收', value: fmt(quote.pc) },
+        ],
+      }
+    } else {
+      // 非美股：用 Twelve Data /quote 端點
+      const quoteUrl = `${TWELVE}/quote?symbol=${twelveSymbol(sym)}&apikey=${TWELVE_KEY}`
+      const q = await cachedFetch(quoteUrl, 2 * 60 * 1000)
+
+      if (q.status === 'error' || !q.close) {
+        error.value = `找不到 ${mkt.label} 股票代號「${sym}」，請確認代號是否正確。`
+        return
+      }
+
+      const close = parseFloat(q.close)
+      const open  = parseFloat(q.open)
+      const high  = parseFloat(q.high)
+      const low   = parseFloat(q.low)
+      const prev  = parseFloat(q.previous_close)
+      const change = close - prev
+      const changePct = prev ? ((change / prev) * 100) : 0
+      const isUp = change >= 0
+
+      result.value = {
+        symbol: sym, currency: cur,
+        name:   q.name || '—',
+        price:  fmt(close),
+        change: fmt(Math.abs(change)),
+        changePct: Math.abs(changePct).toFixed(2),
+        changeSign: isUp ? '▲ +' : '▼ -',
+        isUp,
+        meta: [
+          { label: '開盤', value: fmt(open) },
+          { label: '最高', value: fmt(high) },
+          { label: '最低', value: fmt(low)  },
+          { label: '昨收', value: fmt(prev) },
+        ],
+      }
     }
 
     // Twelve Data 6 個月日線
@@ -87,7 +142,7 @@ async function search() {
 
 async function loadCandles(sym) {
   try {
-    const url = `${TWELVE}/time_series?symbol=${sym}&interval=1day&outputsize=130&apikey=${TWELVE_KEY}`
+    const url = `${TWELVE}/time_series?symbol=${twelveSymbol(sym)}&interval=1day&outputsize=130&apikey=${TWELVE_KEY}`
     const data = await cachedFetch(url)
 
     if (data.status === 'error' || !data.values?.length) return
@@ -186,12 +241,27 @@ function fmt(n) {
         然後貼到 <code class="text-yellow-300">src/App.vue</code> 的 <code class="text-yellow-300">TWELVE_KEY</code>
       </div>
 
+      <!-- 市場選擇 -->
+      <div class="flex gap-2 mb-3">
+        <button
+          v-for="(mkt, key) in MARKETS"
+          :key="key"
+          @click="market = key"
+          class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          :class="market === key
+            ? 'bg-blue-500 text-white'
+            : 'bg-[#1a1d27] text-gray-500 border border-gray-800 hover:text-gray-300'"
+        >
+          {{ mkt.label }}
+        </button>
+      </div>
+
       <div class="flex gap-2 mb-6">
         <input
           v-model="symbol"
           @keydown.enter="search"
           type="text"
-          placeholder="輸入股票代號，例如 AAPL"
+          :placeholder="'輸入股票代號，' + currentMarket.placeholder"
           class="flex-1 bg-[#1a1d27] border border-gray-700 rounded-lg px-4 py-3 text-gray-200 placeholder-gray-600 text-sm outline-none focus:border-blue-500 transition-colors"
         />
         <button
@@ -232,7 +302,7 @@ function fmt(n) {
             </div>
             <div class="flex items-baseline gap-3 pb-5 mb-5 border-b border-gray-800">
               <span class="text-gray-500 text-sm">目前價格</span>
-              <span class="text-white text-4xl font-bold tracking-tight">${{ result.price }}</span>
+              <span class="text-white text-4xl font-bold tracking-tight">{{ result.currency }}{{ result.price }}</span>
             </div>
             <div class="grid grid-cols-4 gap-3">
               <div v-for="item in result.meta" :key="item.label" class="flex flex-col gap-1">
@@ -243,7 +313,7 @@ function fmt(n) {
           </div>
 
           <!-- 🐔 小雞預測 -->
-          <PredictionPanel v-if="prediction" :prediction="prediction" />
+          <PredictionPanel v-if="prediction" :prediction="prediction" :currency="result.currency" />
 
           <!-- K 線圖 -->
           <div v-if="candleData.length" class="bg-[#1a1d27] border border-gray-800 rounded-xl p-6">

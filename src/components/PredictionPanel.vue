@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 const props = defineProps({
   prediction: { type: Object, required: true },
+  currency:   { type: String, default: '$' },
 })
 
 const mainProb = computed(() =>
@@ -147,15 +148,15 @@ const confColor = computed(() => {
           <div class="space-y-2">
             <div class="flex justify-between items-center">
               <span class="text-gray-500 text-xs">買進價位</span>
-              <span class="text-emerald-400 font-bold text-sm">${{ prediction.dayTrade.long.buy }}</span>
+              <span class="text-emerald-400 font-bold text-sm">{{ currency }}{{ prediction.dayTrade.long.buy }}</span>
             </div>
             <div class="flex justify-between items-center">
               <span class="text-gray-500 text-xs">賣出價位</span>
-              <span class="text-emerald-400 font-bold text-sm">${{ prediction.dayTrade.long.sell }}</span>
+              <span class="text-emerald-400 font-bold text-sm">{{ currency }}{{ prediction.dayTrade.long.sell }}</span>
             </div>
             <div class="flex justify-between items-center">
               <span class="text-gray-500 text-xs">停損價位</span>
-              <span class="text-red-400 font-mono text-xs">${{ prediction.dayTrade.long.stop }}</span>
+              <span class="text-red-400 font-mono text-xs">{{ currency }}{{ prediction.dayTrade.long.stop }}</span>
             </div>
             <div class="h-px bg-gray-800 my-1" />
             <div class="flex justify-between items-center">
@@ -182,15 +183,15 @@ const confColor = computed(() => {
           <div class="space-y-2">
             <div class="flex justify-between items-center">
               <span class="text-gray-500 text-xs">賣空價位</span>
-              <span class="text-red-400 font-bold text-sm">${{ prediction.dayTrade.short.sell }}</span>
+              <span class="text-red-400 font-bold text-sm">{{ currency }}{{ prediction.dayTrade.short.sell }}</span>
             </div>
             <div class="flex justify-between items-center">
               <span class="text-gray-500 text-xs">買回價位</span>
-              <span class="text-red-400 font-bold text-sm">${{ prediction.dayTrade.short.cover }}</span>
+              <span class="text-red-400 font-bold text-sm">{{ currency }}{{ prediction.dayTrade.short.cover }}</span>
             </div>
             <div class="flex justify-between items-center">
               <span class="text-gray-500 text-xs">停損價位</span>
-              <span class="text-red-400 font-mono text-xs">${{ prediction.dayTrade.short.stop }}</span>
+              <span class="text-red-400 font-mono text-xs">{{ currency }}{{ prediction.dayTrade.short.stop }}</span>
             </div>
             <div class="h-px bg-gray-800 my-1" />
             <div class="flex justify-between items-center">
