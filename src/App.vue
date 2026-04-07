@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import CandleChart      from './components/CandleChart.vue'
 import TechPanel        from './components/TechPanel.vue'
 import PredictionPanel  from './components/PredictionPanel.vue'
+import NewsPanel        from './components/NewsPanel.vue'
 import { computeTASeries, scoreStock, predictToday } from './utils/technical.js'
 import { cachedFetch } from './utils/apiCache.js'
 
@@ -24,6 +25,7 @@ const result     = ref(null)
 const candleData = ref([])
 const taData     = ref(null)
 const prediction = ref(null)
+const newsData   = ref([])
 
 const MARKETS = {
   US:  { label: '🇺🇸 美股', currency: '$',  exchange: '',     placeholder: '例如 AAPL、TSLA' },
@@ -33,6 +35,9 @@ const MARKETS = {
 }
 
 const currentMarket = computed(() => MARKETS[market.value])
+const visibleMarkets = computed(() =>
+  Object.entries(MARKETS).filter(([key]) => key === 'US')
+)
 
 const needKey = computed(() => !TWELVE_KEY)
 
@@ -60,6 +65,7 @@ async function search() {
   candleData.value = []
   taData.value     = null
   prediction.value = null
+  newsData.value   = []
 
   const mkt = MARKETS[market.value]
   const cur = mkt.currency
@@ -129,8 +135,8 @@ async function search() {
       }
     }
 
-    // Twelve Data 6 個月日線
-    await loadCandles(sym)
+    // Twelve Data 6 個月日線 + 新聞
+    await Promise.all([loadCandles(sym), loadNews(sym)])
   } catch (err) {
     if (!result.value) {
       error.value = '查詢失敗，請稍後再試。（' + err.message + '）'
@@ -171,6 +177,34 @@ async function loadCandles(sym) {
     }
   } catch {
     // K 線失敗不影響報價顯示
+  }
+}
+
+async function loadNews(sym) {
+  try {
+    const today = new Date()
+    const from  = new Date(today)
+    from.setDate(from.getDate() - 7)
+    const toStr   = today.toISOString().slice(0, 10)
+    const fromStr = from.toISOString().slice(0, 10)
+
+    if (market.value === 'US') {
+      // 美股：抓公司新聞
+      const url = `${FINNHUB}/company-news?symbol=${sym}&from=${fromStr}&to=${toStr}&token=${FINNHUB_KEY}`
+      const data = await cachedFetch(url, 10 * 60 * 1000)
+      if (Array.isArray(data)) {
+        newsData.value = data.slice(0, 8)
+      }
+    } else {
+      // 非美股：抓一般市場新聞
+      const url = `${FINNHUB}/news?category=general&token=${FINNHUB_KEY}`
+      const data = await cachedFetch(url, 10 * 60 * 1000)
+      if (Array.isArray(data)) {
+        newsData.value = data.slice(0, 8)
+      }
+    }
+  } catch {
+    // 新聞載入失敗不影響其他功能
   }
 }
 
@@ -244,7 +278,7 @@ function fmt(n) {
       <!-- 市場選擇 -->
       <div class="flex gap-2 mb-3">
         <button
-          v-for="(mkt, key) in MARKETS"
+          v-for="[key, mkt] in visibleMarkets"
           :key="key"
           @click="market = key"
           class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
@@ -311,6 +345,9 @@ function fmt(n) {
               </div>
             </div>
           </div>
+
+          <!-- 📰 最新新聞 -->
+          <NewsPanel v-if="newsData.length" :news="newsData" :symbol="result.symbol" />
 
           <!-- 🐔 小雞預測 -->
           <PredictionPanel v-if="prediction" :prediction="prediction" :currency="result.currency" />
