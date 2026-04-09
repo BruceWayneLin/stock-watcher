@@ -4,6 +4,7 @@ import CandleChart      from './components/CandleChart.vue'
 import TechPanel        from './components/TechPanel.vue'
 import PredictionPanel  from './components/PredictionPanel.vue'
 import NewsPanel        from './components/NewsPanel.vue'
+import ReasoningPanel   from './components/ReasoningPanel.vue'
 import { computeTASeries, scoreStock, predictToday } from './utils/technical.js'
 import { cachedFetch } from './utils/apiCache.js'
 
@@ -345,6 +346,15 @@ function fmt(n) {
               </div>
             </div>
           </div>
+
+          <!-- 🧠 推理引擎 -->
+          <ReasoningPanel
+            v-if="taData || newsData.length"
+            :taData="taData"
+            :prediction="prediction"
+            :newsItems="newsData"
+            :result="result"
+          />
 
           <!-- 📰 最新新聞 -->
           <NewsPanel v-if="newsData.length" :news="newsData" :symbol="result.symbol" />
