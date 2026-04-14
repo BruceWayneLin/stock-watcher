@@ -45,10 +45,10 @@ function timeAgo(ts) {
           </div>
           <div class="flex-1 min-w-0">
             <p class="text-gray-200 text-sm font-medium leading-snug group-hover:text-blue-400 transition-colors line-clamp-2">
-              {{ item.headline }}
+              {{ item.headlineTw || item.headline }}
             </p>
-            <p v-if="item.summary" class="text-gray-500 text-xs mt-1 line-clamp-2 leading-relaxed">
-              {{ item.summary }}
+            <p v-if="item.summaryTw || item.summary" class="text-gray-500 text-xs mt-1 line-clamp-2 leading-relaxed">
+              {{ item.summaryTw || item.summary }}
             </p>
             <div class="flex items-center gap-2 mt-1.5">
               <span class="text-gray-600 text-[10px]">{{ item.source }}</span>

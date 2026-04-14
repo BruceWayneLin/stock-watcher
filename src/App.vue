@@ -9,6 +9,7 @@ import ChickenOracle    from './components/ChickenOracle.vue'
 import ActionCard       from './components/ActionCard.vue'
 import { computeTASeries, scoreStock, predictToday } from './utils/technical.js'
 import { cachedFetch } from './utils/apiCache.js'
+import { translateNewsItems } from './utils/translate.js'
 
 // =============================================
 //  API Keys
@@ -191,20 +192,23 @@ async function loadNews(sym) {
     const toStr   = today.toISOString().slice(0, 10)
     const fromStr = from.toISOString().slice(0, 10)
 
+    let rawNews = []
     if (market.value === 'US') {
-      // 美股：抓公司新聞
       const url = `${FINNHUB}/company-news?symbol=${sym}&from=${fromStr}&to=${toStr}&token=${FINNHUB_KEY}`
       const data = await cachedFetch(url, 10 * 60 * 1000)
-      if (Array.isArray(data)) {
-        newsData.value = data.slice(0, 8)
-      }
+      if (Array.isArray(data)) rawNews = data.slice(0, 8)
     } else {
-      // 非美股：抓一般市場新聞
       const url = `${FINNHUB}/news?category=general&token=${FINNHUB_KEY}`
       const data = await cachedFetch(url, 10 * 60 * 1000)
-      if (Array.isArray(data)) {
-        newsData.value = data.slice(0, 8)
-      }
+      if (Array.isArray(data)) rawNews = data.slice(0, 8)
+    }
+
+    // 先顯示英文，再背景翻譯成中文
+    newsData.value = rawNews
+    if (rawNews.length) {
+      translateNewsItems(rawNews).then(translated => {
+        newsData.value = translated
+      })
     }
   } catch {
     // 新聞載入失敗不影響其他功能

@@ -39,10 +39,10 @@ export function analyzeNewsSentiment(newsItems) {
 
     if (bull > bear) {
       bullishCount++
-      if (highlights.length < 2) highlights.push({ text: item.headline, sentiment: 'bullish' })
+      if (highlights.length < 2) highlights.push({ text: item.headlineTw || item.headline, sentiment: 'bullish' })
     } else if (bear > bull) {
       bearishCount++
-      if (highlights.length < 2) highlights.push({ text: item.headline, sentiment: 'bearish' })
+      if (highlights.length < 2) highlights.push({ text: item.headlineTw || item.headline, sentiment: 'bearish' })
     } else {
       neutralCount++
     }
