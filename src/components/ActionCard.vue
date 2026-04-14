@@ -1,13 +1,24 @@
 <script setup>
 import { computed } from 'vue'
+import { analyzeNewsSentiment } from '../utils/reasoning.js'
 
 const props = defineProps({
   prediction: { type: Object, default: null },
   result: { type: Object, default: null },
+  newsItems: { type: Array, default: () => [] },
 })
 
 const show = computed(() => !!props.prediction?.dayTrade && !!props.result)
 
+// ── 新聞情緒分析 ──
+const news = computed(() => {
+  const sentiment = analyzeNewsSentiment(props.newsItems)
+  const label = sentiment.score > 0.2 ? '偏多' : sentiment.score < -0.2 ? '偏空' : '中性'
+  const color = sentiment.score > 0.2 ? 'emerald' : sentiment.score < -0.2 ? 'red' : 'gray'
+  return { ...sentiment, label, color }
+})
+
+// ── 綜合判斷（技術面 + 新聞面）──
 const d = computed(() => {
   if (!show.value) return null
   const p = props.prediction
@@ -15,10 +26,31 @@ const d = computed(() => {
   const s = p.stats || {}
   const cur = props.result.currency
   const price = dt.price
+  const ns = news.value
 
-  const isBuy = dt.action === 'strong_buy' || dt.action === 'buy'
-  const isSell = dt.action === 'strong_sell' || dt.action === 'sell'
-  const isStrong = dt.action === 'strong_buy' || dt.action === 'strong_sell'
+  // 用新聞情緒調整原始 action
+  // 技術面 action 是基底，新聞可以升級/降級
+  let action = dt.action
+  let label = dt.actionLabel
+
+  if (ns.total > 0) {
+    // 新聞偏多 → 可能升級
+    if (ns.score > 0.3 && action === 'buy') { action = 'strong_buy'; label = '強力推薦買進' }
+    if (ns.score > 0.2 && action === 'neutral' && p.upProb >= 48) { action = 'buy'; label = '新聞利多，建議買進' }
+    // 新聞偏空 → 可能降級
+    if (ns.score < -0.3 && action === 'sell') { action = 'strong_sell'; label = '強力推薦放空' }
+    if (ns.score < -0.2 && action === 'neutral' && p.upProb <= 52) { action = 'sell'; label = '新聞利空，建議放空' }
+    // 技術看多但新聞很空 → 降級
+    if (ns.score < -0.3 && action === 'buy') { action = 'neutral'; label = '技術偏多但新聞利空，觀望' }
+    if (ns.score < -0.3 && action === 'strong_buy') { action = 'buy'; label = '新聞利空，謹慎買進' }
+    // 技術看空但新聞很多 → 降級
+    if (ns.score > 0.3 && action === 'sell') { action = 'neutral'; label = '技術偏空但新聞利多，觀望' }
+    if (ns.score > 0.3 && action === 'strong_sell') { action = 'sell'; label = '新聞利多，謹慎放空' }
+  }
+
+  const isBuy = action === 'strong_buy' || action === 'buy'
+  const isSell = action === 'strong_sell' || action === 'sell'
+  const isStrong = action === 'strong_buy' || action === 'strong_sell'
 
   const pct = (target) => price > 0 ? ((target - price) / price * 100).toFixed(2) : '0.00'
   const sign = (v) => +v >= 0 ? '+' : ''
@@ -48,9 +80,22 @@ const d = computed(() => {
 
   const winRate = isBuy ? (s.winRate ?? p.upProb) : isSell ? (100 - (s.winRate ?? p.upProb)) : (s.winRate ?? p.upProb)
 
+  // 推薦理由：技術面 + 新聞面
+  let reasons
+  if (isBuy) {
+    reasons = [...p.factors.bullish.slice(0, 3)]
+  } else if (isSell) {
+    reasons = [...p.factors.bearish.slice(0, 3)]
+  } else {
+    reasons = [...p.factors.bullish.slice(0, 2), ...p.factors.bearish.slice(0, 2)]
+  }
+  // 加入新聞判斷理由
+  if (ns.total > 0) {
+    reasons.push(`新聞情緒${ns.label}（${ns.bullishCount}正面 / ${ns.bearishCount}負面 / ${ns.neutralCount}中性）`)
+  }
+
   return {
-    action: dt.action,
-    label: dt.actionLabel,
+    action, label,
     isBuy, isSell, isStrong,
     isNeutral: !isBuy && !isSell,
     cur, price,
@@ -65,16 +110,18 @@ const d = computed(() => {
     confidence: p.confidence,
     upProb: p.upProb,
     downProb: p.downProb,
-    reasons: isBuy
-      ? p.factors.bullish.slice(0, 4)
-      : isSell
-        ? p.factors.bearish.slice(0, 4)
-        : [...p.factors.bullish.slice(0, 2), ...p.factors.bearish.slice(0, 2)],
+    reasons,
     patterns: (p.patterns ?? []).slice(0, 2),
-    avgUpPct: s.avgUpPct ?? 0,
-    avgDownPct: s.avgDownPct ?? 0,
     minPossible: dt.minPossible,
     maxPossible: dt.maxPossible,
+    // 新聞
+    newsScore: ns.score,
+    newsLabel: ns.label,
+    newsColor: ns.color,
+    newsTotal: ns.total,
+    newsBull: ns.bullishCount,
+    newsBear: ns.bearishCount,
+    newsHighlights: ns.highlights,
   }
 })
 
@@ -220,17 +267,34 @@ const confPct = computed(() => {
             </p>
             <p class="text-gray-600 text-[10px] mt-1">{{ d.riskReward >= 2 ? '賺>賠' : d.riskReward >= 1 ? '尚可' : '偏低' }}</p>
           </div>
-          <!-- Confidence -->
+          <!-- News Sentiment -->
           <div class="bg-[#121420] rounded-xl p-3 text-center">
-            <p class="text-gray-600 text-[10px] mb-1">信心度</p>
-            <div class="flex justify-center my-1">
-              <div class="w-16 h-2 bg-gray-800 rounded-full overflow-hidden">
-                <div class="h-full rounded-full transition-all duration-700" :class="[
-                  d.confidence === '高' ? 'bg-emerald-500' : d.confidence === '中' ? 'bg-yellow-500' : 'bg-gray-500'
-                ]" :style="{ width: confPct + '%' }" />
-              </div>
+            <p class="text-gray-600 text-[10px] mb-1">新聞情緒</p>
+            <p class="text-2xl font-black" :class="[
+              d.newsColor === 'emerald' ? 'text-emerald-400' : d.newsColor === 'red' ? 'text-red-400' : 'text-gray-500'
+            ]">
+              {{ d.newsTotal > 0 ? d.newsLabel : '—' }}
+            </p>
+            <p class="text-gray-600 text-[10px] mt-1">
+              {{ d.newsTotal > 0 ? `${d.newsBull}正 / ${d.newsBear}負` : '無新聞' }}
+            </p>
+          </div>
+        </div>
+
+        <!-- ===== News Highlights ===== -->
+        <div v-if="d.newsHighlights.length" class="mb-4 bg-[#121420] border border-gray-800 rounded-xl p-3">
+          <p class="text-gray-500 text-xs font-semibold mb-2">📰 關鍵新聞</p>
+          <div class="space-y-1.5">
+            <div
+              v-for="(h, i) in d.newsHighlights"
+              :key="i"
+              class="flex items-start gap-2 text-[11px]"
+            >
+              <span class="shrink-0 mt-0.5" :class="h.sentiment === 'bullish' ? 'text-emerald-400' : 'text-red-400'">
+                {{ h.sentiment === 'bullish' ? '▲' : '▼' }}
+              </span>
+              <span class="text-gray-400 line-clamp-1">{{ h.text }}</span>
             </div>
-            <p class="text-gray-600 text-[10px] mt-1">{{ d.samples }} 天樣本</p>
           </div>
         </div>
 
@@ -273,14 +337,26 @@ const confPct = computed(() => {
             <p v-if="d.confidence === '低'" class="text-yellow-500/80 text-[11px] flex items-start gap-1.5">
               <span class="shrink-0">⚠</span> 信心度低，樣本不足，輕倉操作
             </p>
+            <p v-if="d.newsColor === 'red' && !d.isSell" class="text-yellow-500/80 text-[11px] flex items-start gap-1.5">
+              <span class="shrink-0">⚠</span> 新聞面偏空，注意突發利空風險
+            </p>
           </div>
         </div>
 
         <!-- Disclaimer -->
         <p class="text-gray-700 text-[10px] text-center leading-relaxed">
-          技術面分析僅供參考，不構成投資建議。過去表現不代表未來結果，投資有賺有賠。
+          綜合技術面＋新聞面分析，僅供參考，不構成投資建議。過去表現不代表未來結果。
         </p>
       </div>
     </div>
   </Transition>
 </template>
+
+<style scoped>
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+</style>

@@ -370,11 +370,12 @@ function fmt(n) {
             </div>
           </div>
 
-          <!-- 🎯 今日操作推薦（英雄卡） -->
+          <!-- 🎯 今日操作推薦（技術面＋新聞面綜合判斷） -->
           <ActionCard
             v-if="prediction"
             :prediction="prediction"
             :result="result"
+            :newsItems="newsData"
           />
 
           <!-- 🧠 推理引擎 -->

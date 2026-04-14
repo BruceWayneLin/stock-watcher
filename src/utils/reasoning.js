@@ -16,7 +16,7 @@ const BULLISH_KW = [
   'bull', 'positive', 'best', 'rise', 'up', 'above',
 ]
 
-function analyzeNewsSentiment(newsItems) {
+export function analyzeNewsSentiment(newsItems) {
   if (!newsItems || !newsItems.length) {
     return { score: 0, total: 0, bullishCount: 0, bearishCount: 0, neutralCount: 0, highlights: [] }
   }
