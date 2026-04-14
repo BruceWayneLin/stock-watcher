@@ -228,8 +228,7 @@ function fmt(n) {
         </div>
       </div>
 
-      <!-- 🐣 小雞占卜 -->
-      <ChickenOracle :taData="taData" :prediction="prediction" :result="result" />
+      <!-- 🐣 小雞占卜（已關閉） -->
 
       <!-- 技術分析說明 -->
       <details class="mb-6 bg-[#1a1d27] border border-gray-800 rounded-xl overflow-hidden">
