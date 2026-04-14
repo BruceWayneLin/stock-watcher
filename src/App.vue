@@ -5,6 +5,8 @@ import TechPanel        from './components/TechPanel.vue'
 import PredictionPanel  from './components/PredictionPanel.vue'
 import NewsPanel        from './components/NewsPanel.vue'
 import ReasoningPanel   from './components/ReasoningPanel.vue'
+import ChickenOracle    from './components/ChickenOracle.vue'
+import ActionCard       from './components/ActionCard.vue'
 import { computeTASeries, scoreStock, predictToday } from './utils/technical.js'
 import { cachedFetch } from './utils/apiCache.js'
 
@@ -226,6 +228,9 @@ function fmt(n) {
         </div>
       </div>
 
+      <!-- 🐣 小雞占卜 -->
+      <ChickenOracle :taData="taData" :prediction="prediction" :result="result" />
+
       <!-- 技術分析說明 -->
       <details class="mb-6 bg-[#1a1d27] border border-gray-800 rounded-xl overflow-hidden">
         <summary class="px-4 py-3 text-gray-400 text-xs font-semibold cursor-pointer hover:text-gray-300 transition-colors select-none flex items-center gap-2">
@@ -256,11 +261,30 @@ function fmt(n) {
             <div class="flex justify-between"><span class="text-gray-500">5日高低點</span><span class="text-gray-400">短期支撐壓力</span></div>
           </div>
 
+          <!-- 新增指標 -->
+          <p class="text-blue-400 text-xs font-semibold mt-3 mb-2">🕯 K 線型態偵測</p>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-4">
+            <div class="flex justify-between"><span class="text-gray-500">多頭/空頭吞噬</span><span class="text-gray-400">反轉訊號</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">錘子線/射擊之星</span><span class="text-gray-400">頂底訊號</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">三紅兵/三黑鴉</span><span class="text-gray-400">趨勢確認</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">跳空缺口</span><span class="text-gray-400">突破訊號</span></div>
+          </div>
+
+          <p class="text-blue-400 text-xs font-semibold mb-2">📐 目標價計算（多方法交叉驗證）</p>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-4">
+            <div class="flex justify-between"><span class="text-gray-500">Pivot Points</span><span class="text-gray-400">S1/R1/S2/R2</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Fibonacci</span><span class="text-gray-400">23.6%/61.8% 延伸</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">歷史回測 P75</span><span class="text-gray-400">相似天 75% 分位</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">布林 + ATR</span><span class="text-gray-400">波動邊界</span></div>
+          </div>
+
           <!-- 公式 -->
           <p class="text-blue-400 text-xs font-semibold mb-2">計算公式</p>
           <div class="space-y-1 text-[10px] font-mono">
             <p class="text-emerald-400/80">▲ 做多：買進 = max(S1, BB下軌, 現價−0.5×ATR)　賣出 = min(R1, BB上軌, 現價+1.2×ATR)</p>
             <p class="text-red-400/80">▼ 賣空：賣空 = min(R1, BB上軌, 現價+0.5×ATR)　買回 = max(S1, BB下軌, 現價−1.2×ATR)</p>
+            <p class="text-yellow-400/80">🎯 目標價 = median(Pivot R1, BB上軌, 5日高, Fib 23.6%, 歷史P75)</p>
+            <p class="text-orange-400/80">🔥 最高價 = median(Pivot R2, Fib 61.8%, 歷史最大, BB上軌×1.01)</p>
             <p class="text-gray-600">停損 = 進場價 ± 0.5×ATR</p>
           </div>
 
@@ -346,6 +370,13 @@ function fmt(n) {
               </div>
             </div>
           </div>
+
+          <!-- 🎯 今日操作推薦（英雄卡） -->
+          <ActionCard
+            v-if="prediction"
+            :prediction="prediction"
+            :result="result"
+          />
 
           <!-- 🧠 推理引擎 -->
           <ReasoningPanel

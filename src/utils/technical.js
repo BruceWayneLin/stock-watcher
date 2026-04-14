@@ -175,6 +175,72 @@ export function scoreStock(closes) {
   return { score, signals, monthRet, rsi: rsiVal, ma10, ma20, ma50 }
 }
 
+// ── K 線型態偵測 ──────────────────────────────────
+
+function detectCandlePatterns(candles) {
+  const patterns = []
+  const n = candles.length
+  if (n < 3) return patterns
+
+  const last = candles[n - 1]
+  const prev = candles[n - 2]
+
+  const bodySize = Math.abs(last.close - last.open)
+  const upperShadow = last.high - Math.max(last.open, last.close)
+  const lowerShadow = Math.min(last.open, last.close) - last.low
+  const totalRange = last.high - last.low
+  const prevBody = Math.abs(prev.close - prev.open)
+
+  // 十字線 (Doji)
+  if (totalRange > 0 && bodySize / totalRange < 0.1) {
+    patterns.push({ name: '十字線', type: 'neutral', desc: '多空拉鋸，留意變盤' })
+  }
+
+  // 錘子線 (Hammer)
+  if (lowerShadow > bodySize * 2 && upperShadow < bodySize * 0.5 && totalRange > 0) {
+    patterns.push({ name: '錘子線', type: 'bullish', desc: '下影線長，買盤承接力道強' })
+  }
+
+  // 射擊之星 (Shooting Star)
+  if (upperShadow > bodySize * 2 && lowerShadow < bodySize * 0.5 && totalRange > 0) {
+    patterns.push({ name: '射擊之星', type: 'bearish', desc: '上影線長，賣壓沉重' })
+  }
+
+  // 多頭吞噬 (Bullish Engulfing)
+  if (last.close > last.open && prev.close < prev.open &&
+      last.open <= prev.close && last.close >= prev.open && bodySize > prevBody) {
+    patterns.push({ name: '多頭吞噬', type: 'bullish', desc: '強力反轉看漲訊號' })
+  }
+
+  // 空頭吞噬 (Bearish Engulfing)
+  if (last.close < last.open && prev.close > prev.open &&
+      last.open >= prev.close && last.close <= prev.open && bodySize > prevBody) {
+    patterns.push({ name: '空頭吞噬', type: 'bearish', desc: '強力反轉看跌訊號' })
+  }
+
+  // 連三紅 / 三黑
+  if (n >= 4) {
+    const c3 = candles[n - 3]
+    const threeUp = c3.close > c3.open && prev.close > prev.open && last.close > last.open
+      && prev.close > c3.close && last.close > prev.close
+    const threeDown = c3.close < c3.open && prev.close < prev.open && last.close < last.open
+      && prev.close < c3.close && last.close < prev.close
+
+    if (threeUp) patterns.push({ name: '三紅兵', type: 'bullish', desc: '連三根紅K，多頭氣勢強' })
+    if (threeDown) patterns.push({ name: '三黑鴉', type: 'bearish', desc: '連三根黑K，空頭氣勢強' })
+  }
+
+  // 缺口 (Gap)
+  if (last.low > prev.high) {
+    patterns.push({ name: '跳空上漲', type: 'bullish', desc: '跳空缺口，多頭強勢突破' })
+  }
+  if (last.high < prev.low) {
+    patterns.push({ name: '跳空下跌', type: 'bearish', desc: '跳空缺口，空頭強力殺盤' })
+  }
+
+  return patterns
+}
+
 // ── 🐔 小雞預測引擎 ──────────────────────────────────
 // 用歷史回測法預測當日漲跌機率
 // 在歷史資料中找出技術面狀態相似的日子，統計隔天漲跌比例
@@ -246,6 +312,7 @@ export function predictToday(candles) {
   let totalUp = 0, totalDown = 0
   let weightedUp = 0, weightedDown = 0
   const factors = { bullish: [], bearish: [] }
+  const nextDayReturns = []
 
   for (let i = 50; i < todayIdx; i++) {
     const histSignals = getSignalVector(closes, i)
@@ -255,7 +322,9 @@ export function predictToday(candles) {
     if (sim < 0.7) continue  // 只看相似度 >= 70% 的日子
 
     const nextDayChange = closes[i + 1] - closes[i]
+    const nextDayPct = (nextDayChange / closes[i]) * 100
     const weight = sim * sim  // 越相似權重越大
+    nextDayReturns.push(nextDayPct)
 
     if (nextDayChange > 0) {
       totalUp++
@@ -272,6 +341,27 @@ export function predictToday(candles) {
   const totalWeight = weightedUp + weightedDown
   const upProb  = Math.round((weightedUp / totalWeight) * 100)
   const downProb = 100 - upProb
+
+  // ── 歷史回報統計（精準度核心）──
+  const upRets = nextDayReturns.filter(r => r > 0).sort((a, b) => a - b)
+  const downRetsArr = nextDayReturns.filter(r => r <= 0).sort((a, b) => a - b)
+  const winRate = Math.round((totalUp / totalSamples) * 100)
+  const avgUpPct = upRets.length ? +(upRets.reduce((a, b) => a + b, 0) / upRets.length).toFixed(2) : 0
+  const avgDownPct = downRetsArr.length ? +(downRetsArr.reduce((a, b) => a + b, 0) / downRetsArr.length).toFixed(2) : 0
+  const maxUpPct = upRets.length ? +upRets[upRets.length - 1].toFixed(2) : 0
+  const p75UpPct = upRets.length >= 4 ? +upRets[Math.floor(upRets.length * 0.75)].toFixed(2) : avgUpPct
+  const maxDownPct = downRetsArr.length ? +downRetsArr[0].toFixed(2) : 0
+  const p25DownPct = downRetsArr.length >= 4 ? +downRetsArr[Math.floor(downRetsArr.length * 0.25)].toFixed(2) : avgDownPct
+
+  const currentPrice = closes[todayIdx]
+  const stats = {
+    winRate, totalUp, totalDown,
+    avgUpPct, avgDownPct, maxUpPct, maxDownPct, p75UpPct, p25DownPct,
+    currentPrice: +currentPrice.toFixed(2),
+    targetPrice: +(currentPrice * (1 + p75UpPct / 100)).toFixed(2),
+    maxPrice: +(currentPrice * (1 + maxUpPct / 100)).toFixed(2),
+    riskPrice: +(currentPrice * (1 + avgDownPct / 100)).toFixed(2),
+  }
 
   // 分析看漲/看跌因素
   if (todaySignals.ma10_above_ma20)   factors.bullish.push('MA10 在 MA20 上方（短期趨勢向上）')
@@ -310,14 +400,27 @@ export function predictToday(candles) {
   if (todaySignals.mom5_up)            factors.bullish.push('近 5 日動量向上')
   else                                  factors.bearish.push('近 5 日動量向下')
 
-  // 信心等級
+  // ── K 線型態加入因素 ──
+  const patterns = detectCandlePatterns(candles)
+  for (const p of patterns) {
+    if (p.type === 'bullish') factors.bullish.push(`${p.name}：${p.desc}`)
+    else if (p.type === 'bearish') factors.bearish.push(`${p.name}：${p.desc}`)
+    else {
+      factors.bullish.push(`${p.name}：${p.desc}`)
+      factors.bearish.push(`${p.name}：${p.desc}`)
+    }
+  }
+
+  // 信心等級（含型態 + 勝率加成）
   let confidence
-  if (totalSamples >= 30 && Math.abs(upProb - 50) >= 15) confidence = '高'
-  else if (totalSamples >= 15) confidence = '中'
+  const hasStrongPattern = patterns.some(p =>
+    ['多頭吞噬', '空頭吞噬', '三紅兵', '三黑鴉', '跳空上漲', '跳空下跌'].includes(p.name))
+  if ((totalSamples >= 30 && Math.abs(upProb - 50) >= 15) || (totalSamples >= 20 && hasStrongPattern)) confidence = '高'
+  else if (totalSamples >= 15 || hasStrongPattern) confidence = '中'
   else confidence = '低'
 
   // 當沖交易建議
-  const dayTrade = calcDayTrade(candles, upProb)
+  const dayTrade = calcDayTrade(candles, upProb, stats)
 
   return {
     upProb,
@@ -327,6 +430,8 @@ export function predictToday(candles) {
     samples: totalSamples,
     confidence,
     dayTrade,
+    stats,
+    patterns,
   }
 }
 
@@ -344,7 +449,7 @@ function atr(candles, period = 14) {
   return recent.reduce((a, b) => a + b, 0) / period
 }
 
-function calcDayTrade(candles, upProb) {
+function calcDayTrade(candles, upProb, stats = {}) {
   const last = candles[candles.length - 1]
   const prev = candles[candles.length - 2]
   const price = last.close
@@ -354,8 +459,8 @@ function calcDayTrade(candles, upProb) {
 
   // Pivot Points (用前一天的 H/L/C)
   const pivot = (prev.high + prev.low + prev.close) / 3
-  const s1 = 2 * pivot - prev.high   // Support 1
-  const r1 = 2 * pivot - prev.low    // Resistance 1
+  const s1 = 2 * pivot - prev.high
+  const r1 = 2 * pivot - prev.low
   const s2 = pivot - (prev.high - prev.low)
   const r2 = pivot + (prev.high - prev.low)
 
@@ -364,51 +469,96 @@ function calcDayTrade(candles, upProb) {
   const bb = bollingerBands(closes, 20, 2)
   const bbUpper = bb.upper[bb.upper.length - 1]
   const bbLower = bb.lower[bb.lower.length - 1]
-  const bbMid   = bb.mid[bb.mid.length - 1]
 
   // 5 日最高最低
   const recent5 = candles.slice(-5)
   const high5 = Math.max(...recent5.map(c => c.high))
   const low5  = Math.min(...recent5.map(c => c.low))
 
+  // Fibonacci (20 日波段)
+  const recent20 = candles.slice(-20)
+  const swingHigh = Math.max(...recent20.map(c => c.high))
+  const swingLow  = Math.min(...recent20.map(c => c.low))
+  const swingRange = swingHigh - swingLow
+  const fibR1 = swingHigh + swingRange * 0.236
+  const fibR2 = swingHigh + swingRange * 0.618
+  const fibS1 = swingLow - swingRange * 0.236
+
   const f = (n) => parseFloat(n.toFixed(2))
 
   // ── 做多當沖 ──
-  // 買進：取 Pivot S1、布林下軌、5日低點 的中間偏保守值
   const longBuy  = f(Math.max(s1, bbLower, price - atrVal * 0.5))
-  // 賣出：取 Pivot R1、布林上軌、5日高點 的中間偏保守值
   const longSell = f(Math.min(r1, bbUpper, price + atrVal * 1.2))
-  // 停損
   const longStop = f(longBuy - atrVal * 0.5)
 
   // ── 賣空當沖 ──
-  // 賣空進場：取 R1、布林上軌、近期高點的保守值
-  const shortSell = f(Math.min(r1, bbUpper, price + atrVal * 0.5))
-  // 買回：取 S1、布林下軌、近期低點
+  const shortSell  = f(Math.min(r1, bbUpper, price + atrVal * 0.5))
   const shortCover = f(Math.max(s1, bbLower, price - atrVal * 1.2))
-  // 停損
-  const shortStop = f(shortSell + atrVal * 0.5)
+  const shortStop  = f(shortSell + atrVal * 0.5)
 
   // 預估獲利空間
   const longProfit  = f(((longSell - longBuy) / longBuy) * 100)
   const shortProfit = f(((shortSell - shortCover) / shortCover) * 100)
 
+  // ── 目標價（多方法交叉驗證）──
+  const upTargets = [longSell, r1, high5].filter(Number.isFinite)
+  if (stats.targetPrice) upTargets.push(stats.targetPrice)
+  if (Number.isFinite(fibR1)) upTargets.push(fibR1)
+  upTargets.sort((a, b) => a - b)
+  const targetHigh = f(upTargets[Math.floor(upTargets.length / 2)] ?? longSell)
+
+  // 最高可能（樂觀上限）
+  const maxCandidates = [r2, high5 + atrVal * 0.5].filter(Number.isFinite)
+  if (stats.maxPrice) maxCandidates.push(stats.maxPrice)
+  if (Number.isFinite(fibR2)) maxCandidates.push(fibR2)
+  if (Number.isFinite(bbUpper)) maxCandidates.push(bbUpper * 1.01)
+  maxCandidates.sort((a, b) => a - b)
+  const maxPossible = f(maxCandidates[Math.floor(maxCandidates.length / 2)] ?? r2)
+
+  // 最低可能（悲觀下限）
+  const minCandidates = [s2, low5 - atrVal * 0.5].filter(Number.isFinite)
+  if (stats.riskPrice) minCandidates.push(stats.riskPrice)
+  if (Number.isFinite(fibS1)) minCandidates.push(fibS1)
+  if (Number.isFinite(bbLower)) minCandidates.push(bbLower * 0.99)
+  minCandidates.sort((a, b) => a - b)
+  const minPossible = f(minCandidates[Math.floor(minCandidates.length / 2)] ?? s2)
+
+  // 風報比
+  const reward = targetHigh - longBuy
+  const risk = longBuy - longStop
+  const riskReward = risk > 0 ? f(reward / risk) : 0
+
+  // ── 操作建議 ──
+  const wr = stats.winRate ?? (upProb > 50 ? upProb : 100 - upProb)
+  let action, actionLabel
+  if (upProb >= 65 && wr >= 60) {
+    action = 'strong_buy'; actionLabel = '強力推薦買進'
+  } else if (upProb >= 55) {
+    action = 'buy'; actionLabel = '今日推薦買進'
+  } else if (upProb >= 45) {
+    action = 'neutral'; actionLabel = '今日建議觀望'
+  } else if (upProb >= 35) {
+    action = 'sell'; actionLabel = '今日建議放空'
+  } else {
+    action = 'strong_sell'; actionLabel = '強力推薦放空'
+  }
+
   return {
     price: f(price),
     atr: f(atrVal),
     pivot: f(pivot),
+    targetHigh,
+    maxPossible,
+    minPossible,
+    riskReward,
+    action,
+    actionLabel,
     long: {
-      buy:    longBuy,
-      sell:   longSell,
-      stop:   longStop,
-      profit: longProfit,
+      buy: longBuy, sell: longSell, stop: longStop, profit: longProfit,
       recommended: upProb >= 50,
     },
     short: {
-      sell:   shortSell,
-      cover:  shortCover,
-      stop:   shortStop,
-      profit: shortProfit,
+      sell: shortSell, cover: shortCover, stop: shortStop, profit: shortProfit,
       recommended: upProb < 50,
     },
   }

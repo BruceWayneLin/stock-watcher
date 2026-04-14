@@ -34,7 +34,12 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('status','ok'\\)\\); [print\\(s\\) for s in \\(d.get\\('data'\\) or []\\)[:5]]\")",
       "Bash(curl -s \"https://api.twelvedata.com/quote?symbol=2330&exchange=TWSE&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")",
       "Bash(curl -s \"https://api.twelvedata.com/quote?symbol=7203&exchange=TSE&apikey=5d7d4665dc2e4a3297213c1aaa4439bc\")",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(curl -s http://localhost:5175/src/utils/technical.js)",
+      "Bash(curl -s http://localhost:5175/src/components/ActionCard.vue)",
+      "Bash(lsof -ti:5175)",
+      "Bash(xargs kill:*)"
     ]
   }
 }
