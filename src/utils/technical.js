@@ -282,22 +282,30 @@ function getSignalVector(closes, idx) {
     ma20_above_ma50: ma20 > ma50 ? 1 : 0,
     price_above_ma20: last > ma20 ? 1 : 0,
     price_above_ma50: last > ma50 ? 1 : 0,
-    rsi_zone: rsiVal < 30 ? 0 : rsiVal < 50 ? 1 : rsiVal < 70 ? 2 : 3,
+    rsi_norm: rsiVal / 100,           // 連續值 0~1（比 4 區間精準）
     macd_bullish: macdVal.bullish ? 1 : 0,
     macd_above_zero: macdVal.aboveZero ? 1 : 0,
-    bb_zone: bbPos < 0.2 ? 0 : bbPos < 0.5 ? 1 : bbPos < 0.8 ? 2 : 3,
+    bb_pos: bbPos,                     // 連續值 0~1（布林位置）
     mom3_up: mom3 > 0 ? 1 : 0,
     mom5_up: mom5 > 0 ? 1 : 0,
   }
 }
 
+// 混合相似度：離散特徵用精確匹配，連續特徵用距離
+const _continuous = new Set(['rsi_norm', 'bb_pos'])
+
 function signalSimilarity(a, b) {
   const keys = Object.keys(a)
-  let match = 0
+  let totalSim = 0
   for (const k of keys) {
-    if (a[k] === b[k]) match++
+    if (_continuous.has(k)) {
+      // RSI diff 10% → 0.75 相似，diff 40% → 0
+      totalSim += Math.max(0, 1 - Math.abs(a[k] - b[k]) * 2.5)
+    } else {
+      totalSim += a[k] === b[k] ? 1 : 0
+    }
   }
-  return match / keys.length
+  return totalSim / keys.length
 }
 
 export function predictToday(candles) {
@@ -319,7 +327,7 @@ export function predictToday(candles) {
     if (!histSignals) continue
 
     const sim = signalSimilarity(todaySignals, histSignals)
-    if (sim < 0.7) continue  // 只看相似度 >= 70% 的日子
+    if (sim < 0.75) continue  // 提高門檻：相似度 >= 75%
 
     const nextDayChange = closes[i + 1] - closes[i]
     const nextDayPct = (nextDayChange / closes[i]) * 100
@@ -376,11 +384,12 @@ export function predictToday(candles) {
   if (todaySignals.price_above_ma50)  factors.bullish.push('股價站上 MA50')
   else                                 factors.bearish.push('股價跌破 MA50')
 
-  const rsiZoneLabels = ['超賣區（RSI < 30）反彈機會高', 'RSI 偏弱（30-50）', 'RSI 強勢（50-70）', '超買區（RSI > 70）回調風險']
-  if (todaySignals.rsi_zone === 0)      factors.bullish.push(rsiZoneLabels[0])
-  else if (todaySignals.rsi_zone === 1) factors.bearish.push(rsiZoneLabels[1])
-  else if (todaySignals.rsi_zone === 2) factors.bullish.push(rsiZoneLabels[2])
-  else                                   factors.bearish.push(rsiZoneLabels[3])
+  // RSI（連續值 → 更精準的判斷）
+  const rsiPct = todaySignals.rsi_norm * 100
+  if (rsiPct < 30)      factors.bullish.push(`超賣區（RSI ${rsiPct.toFixed(0)}）反彈機會高`)
+  else if (rsiPct < 50) factors.bearish.push(`RSI 偏弱（${rsiPct.toFixed(0)}）`)
+  else if (rsiPct < 70) factors.bullish.push(`RSI 強勢（${rsiPct.toFixed(0)}）`)
+  else                   factors.bearish.push(`超買區（RSI ${rsiPct.toFixed(0)}）回調風險`)
 
   if (todaySignals.macd_bullish)       factors.bullish.push('MACD 多頭（MACD > Signal）')
   else                                  factors.bearish.push('MACD 空頭（MACD < Signal）')
@@ -388,11 +397,12 @@ export function predictToday(candles) {
   if (todaySignals.macd_above_zero)    factors.bullish.push('MACD 在零線上方')
   else                                  factors.bearish.push('MACD 在零線下方')
 
-  const bbLabels = ['接近布林下軌（可能超賣反彈）', '布林中下段', '布林中上段', '接近布林上軌（可能過熱回調）']
-  if (todaySignals.bb_zone === 0)       factors.bullish.push(bbLabels[0])
-  else if (todaySignals.bb_zone === 3)  factors.bearish.push(bbLabels[3])
-  else if (todaySignals.bb_zone === 2)  factors.bullish.push(bbLabels[2])
-  else                                   factors.bearish.push(bbLabels[1])
+  // 布林通道（連續值）
+  const bbp = todaySignals.bb_pos
+  if (bbp < 0.2)       factors.bullish.push('接近布林下軌（可能超賣反彈）')
+  else if (bbp >= 0.8)  factors.bearish.push('接近布林上軌（可能過熱回調）')
+  else if (bbp >= 0.5)  factors.bullish.push('布林中上段')
+  else                   factors.bearish.push('布林中下段')
 
   if (todaySignals.mom3_up)            factors.bullish.push('近 3 日動量向上')
   else                                  factors.bearish.push('近 3 日動量向下')
@@ -528,19 +538,32 @@ function calcDayTrade(candles, upProb, stats = {}) {
   const risk = longBuy - longStop
   const riskReward = risk > 0 ? f(reward / risk) : 0
 
-  // ── 操作建議 ──
-  const wr = stats.winRate ?? (upProb > 50 ? upProb : 100 - upProb)
+  // ── 操作建議（嚴格門檻 + 波動度調整）──
+  const volPct = f((atrVal / price) * 100)  // ATR 佔股價 %
+  const isHighVol = volPct > 3              // 日均波動 >3% = 高波動
+  const wr = stats.winRate ?? 50
+  const sampleCount = (stats.totalUp ?? 0) + (stats.totalDown ?? 0)
+
   let action, actionLabel
-  if (upProb >= 65 && wr >= 60) {
-    action = 'strong_buy'; actionLabel = '強力推薦買進'
-  } else if (upProb >= 55) {
-    action = 'buy'; actionLabel = '今日推薦買進'
-  } else if (upProb >= 45) {
-    action = 'neutral'; actionLabel = '今日建議觀望'
-  } else if (upProb >= 35) {
-    action = 'sell'; actionLabel = '今日建議放空'
+  // 「強力」需要三重確認：機率 + 勝率 + 樣本數，且不能是高波動股
+  if (upProb >= 70 && wr >= 65 && sampleCount >= 25 && !isHighVol) {
+    action = 'strong_buy'; actionLabel = '技術面強力看多'
+  } else if (upProb >= 58 && wr >= 53) {
+    action = 'buy'; actionLabel = '技術面偏多'
+  } else if (upProb <= 30 && (100 - wr) >= 65 && sampleCount >= 25 && !isHighVol) {
+    action = 'strong_sell'; actionLabel = '技術面強力看空'
+  } else if (upProb <= 42 && (100 - wr) >= 53) {
+    action = 'sell'; actionLabel = '技術面偏空'
   } else {
-    action = 'strong_sell'; actionLabel = '強力推薦放空'
+    action = 'neutral'; actionLabel = '多空不明，建議觀望'
+  }
+
+  // 高波動股自動降級（CIFR、MSTR 這類股不該給強力推薦）
+  if (isHighVol) {
+    if (action === 'strong_buy') { action = 'buy'; actionLabel = '偏多（高波動注意）' }
+    else if (action === 'strong_sell') { action = 'sell'; actionLabel = '偏空（高波動注意）' }
+    else if (action === 'buy') { actionLabel = '技術面偏多（高波動）' }
+    else if (action === 'sell') { actionLabel = '技術面偏空（高波動）' }
   }
 
   return {
@@ -553,6 +576,8 @@ function calcDayTrade(candles, upProb, stats = {}) {
     riskReward,
     action,
     actionLabel,
+    volPct,
+    isHighVol,
     long: {
       buy: longBuy, sell: longSell, stop: longStop, profit: longProfit,
       recommended: upProb >= 50,

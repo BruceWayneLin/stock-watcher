@@ -28,24 +28,46 @@ const d = computed(() => {
   const price = dt.price
   const ns = news.value
 
-  // 用新聞情緒調整原始 action
-  // 技術面 action 是基底，新聞可以升級/降級
+  // ── 技術面 × 新聞面 綜合判斷 ──
+  // 原則：技術和新聞矛盾 → 強制觀望（CIFR 教訓）
   let action = dt.action
   let label = dt.actionLabel
 
-  if (ns.total > 0) {
-    // 新聞偏多 → 可能升級
-    if (ns.score > 0.3 && action === 'buy') { action = 'strong_buy'; label = '強力推薦買進' }
-    if (ns.score > 0.2 && action === 'neutral' && p.upProb >= 48) { action = 'buy'; label = '新聞利多，建議買進' }
-    // 新聞偏空 → 可能降級
-    if (ns.score < -0.3 && action === 'sell') { action = 'strong_sell'; label = '強力推薦放空' }
-    if (ns.score < -0.2 && action === 'neutral' && p.upProb <= 52) { action = 'sell'; label = '新聞利空，建議放空' }
-    // 技術看多但新聞很空 → 降級
-    if (ns.score < -0.3 && action === 'buy') { action = 'neutral'; label = '技術偏多但新聞利空，觀望' }
-    if (ns.score < -0.3 && action === 'strong_buy') { action = 'buy'; label = '新聞利空，謹慎買進' }
-    // 技術看空但新聞很多 → 降級
-    if (ns.score > 0.3 && action === 'sell') { action = 'neutral'; label = '技術偏空但新聞利多，觀望' }
-    if (ns.score > 0.3 && action === 'strong_sell') { action = 'sell'; label = '新聞利多，謹慎放空' }
+  if (ns.total >= 3) {
+    const bull = ns.score > 0.2
+    const strongBull = ns.score > 0.35
+    const bear = ns.score < -0.2
+    const strongBear = ns.score < -0.35
+
+    // 矛盾 → 強制降級到觀望（最重要的修正）
+    if (strongBull && (action === 'sell' || action === 'strong_sell')) {
+      action = 'neutral'; label = '技術偏空但新聞利多，不宜放空'
+    } else if (strongBear && (action === 'buy' || action === 'strong_buy')) {
+      action = 'neutral'; label = '技術偏多但新聞利空，先觀望'
+    }
+    // 輕微矛盾 → 降一級
+    else if (bull && action === 'sell') { action = 'neutral'; label = '技術偏空但新聞偏多，觀望' }
+    else if (bear && action === 'buy') { action = 'neutral'; label = '技術偏多但新聞偏空，觀望' }
+    else if (bear && action === 'strong_buy') { action = 'buy'; label = '技術看多（新聞偏空，謹慎）' }
+    else if (bull && action === 'strong_sell') { action = 'sell'; label = '技術看空（新聞偏多，謹慎）' }
+
+    // 同向 → 加強（但不隨便升到 strong）
+    else if (strongBull && action === 'buy' && p.confidence !== '低') {
+      action = 'strong_buy'; label = '技術＋新聞雙重看多'
+    } else if (strongBear && action === 'sell' && p.confidence !== '低') {
+      action = 'strong_sell'; label = '技術＋新聞雙重看空'
+    }
+    // 新聞可以把觀望小幅推一下（但門檻要高）
+    else if (strongBull && action === 'neutral' && p.upProb >= 50) {
+      action = 'buy'; label = '新聞面利多，技術面中性偏多'
+    } else if (strongBear && action === 'neutral' && p.upProb <= 50) {
+      action = 'sell'; label = '新聞面利空，技術面中性偏空'
+    }
+  }
+
+  // 高波動股額外標注
+  if (dt.isHighVol && action !== 'neutral') {
+    label += ' ⚡高波動'
   }
 
   const isBuy = action === 'strong_buy' || action === 'buy'
@@ -122,6 +144,9 @@ const d = computed(() => {
     newsBull: ns.bullishCount,
     newsBear: ns.bearishCount,
     newsHighlights: ns.highlights,
+    // 波動度
+    volPct: dt.volPct ?? 0,
+    isHighVol: dt.isHighVol ?? false,
   }
 })
 
@@ -328,6 +353,9 @@ const confPct = computed(() => {
         <!-- ===== Warnings ===== -->
         <div class="bg-yellow-950/20 border border-yellow-800/30 rounded-lg px-3 py-2.5 mb-3">
           <div class="space-y-1">
+            <p v-if="d.isHighVol" class="text-orange-400/80 text-[11px] flex items-start gap-1.5">
+              <span class="shrink-0">⚡</span> 此股日均波動 {{ d.volPct }}%，屬高波動股，技術面訊號可靠度較低
+            </p>
             <p v-if="!d.isNeutral" class="text-yellow-500/80 text-[11px] flex items-start gap-1.5">
               <span class="shrink-0">⚠</span> 停損到就執行，不要凹單！
             </p>
@@ -340,12 +368,15 @@ const confPct = computed(() => {
             <p v-if="d.newsColor === 'red' && !d.isSell" class="text-yellow-500/80 text-[11px] flex items-start gap-1.5">
               <span class="shrink-0">⚠</span> 新聞面偏空，注意突發利空風險
             </p>
+            <p v-if="d.newsColor === 'emerald' && !d.isBuy" class="text-yellow-500/80 text-[11px] flex items-start gap-1.5">
+              <span class="shrink-0">⚠</span> 新聞面偏多，放空須謹慎
+            </p>
           </div>
         </div>
 
         <!-- Disclaimer -->
         <p class="text-gray-700 text-[10px] text-center leading-relaxed">
-          綜合技術面＋新聞面分析，僅供參考，不構成投資建議。過去表現不代表未來結果。
+          綜合技術面＋新聞面分析，勝率為歷史回測非保證。僅供參考，不構成投資建議。
         </p>
       </div>
     </div>
