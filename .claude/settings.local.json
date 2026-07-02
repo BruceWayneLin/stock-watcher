@@ -39,7 +39,15 @@
       "Bash(curl -s http://localhost:5175/src/utils/technical.js)",
       "Bash(curl -s http://localhost:5175/src/components/ActionCard.vue)",
       "Bash(lsof -ti:5175)",
-      "Bash(xargs kill:*)"
+      "Bash(xargs kill:*)",
+      "Bash(gh run *)",
+      "Bash(git mv *)",
+      "Bash(curl -s -D - -o /dev/null \"https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?interval=5m&range=1d\" -H \"User-Agent: Mozilla/5.0\" -H \"Origin: https://example.com\")",
+      "Bash(python3 -c \"import urllib.parse; print\\(urllib.parse.quote\\('https://query1.finance.yahoo.com/v8/finance/chart/^NDX?interval=1d&range=1d', safe=''\\)\\)\")",
+      "Bash(curl -s \"https://api.allorigins.win/raw?url=$\\(python3 -c \"import urllib.parse; print\\(urllib.parse.quote\\('https://query1.finance.yahoo.com/v8/finance/chart/^NDX?interval=1d&range=1d', safe=''\\)\\)\"\\)\")",
+      "Bash(curl -s \"https://corsproxy.io/?url=$\\(python3 -c \"import urllib.parse; print\\(urllib.parse.quote\\('https://query1.finance.yahoo.com/v8/finance/chart/^NDX?interval=1d&range=1d', safe=''\\)\\)\"\\)\")",
+      "Bash(curl -s \"https://finnhub.io/api/v1/quote?symbol=QQQ&token=d72fcm1r01qqkte0p75gd72fcm1r01qqkte0p760\")",
+      "Bash(gh repo *)"
     ]
   }
 }
