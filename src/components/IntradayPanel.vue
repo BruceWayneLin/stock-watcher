@@ -5,11 +5,17 @@ import { computeTASeries, predictToday, walkForwardHitRate } from '../utils/tech
 import { cachedFetch } from '../utils/apiCache.js'
 import { FINNHUB, FINNHUB_KEY, TWELVE, TWELVE_KEY } from '../utils/config.js'
 
+// 通用分線預測面板：NAS100 傳 symbol="QQQ" + nasIndex，個股當沖直接傳股票代號
+const props = defineProps({
+  symbol:   { type: String, required: true },
+  nasIndex: { type: Boolean, default: false },  // NAS100 模式：所有價位換算成指數點位
+  title:    { type: String, default: '' },
+  badge:    { type: String, default: '' },
+  subtitle: { type: String, default: '六時間框架 · 下一根 K 棒方向回測' },
+})
+
 // 優勢 < 8% 的預測視為雜訊，一律顯示觀望（回測顯示這區間命中率 ≈ 丟銅板）
 const NEUTRAL_MARGIN = 8
-
-// NAS100 用 QQQ ETF 追蹤（免費方案無法直接取 NDX 指數，QQQ 走勢完全同步）
-const SYMBOL = 'QQQ'
 
 const INTERVALS = [
   { key: '1min',  label: '1分',   ttl: 60_000,      weight: 0.5 },
@@ -27,9 +33,38 @@ const quote    = ref(null)
 const tf       = ref({})   // interval key → { candles, prediction, ta, hitRate, error }
 const lastUpdate = ref(null)
 
+// ── NAS100 指數點位換算 ──
+// 訊號用 QQQ 分線計算（免費、穩定、走勢與指數同步），
+// 顯示價位 × (NDX 即時指數 / QQQ 即時價) 換算成 Plus500 可直接輸入的指數點位。
+// NDX 報價走 Yahoo（經 CORS proxy），失敗時用上次成功的比率（localStorage 快取）。
+const RATIO_KEY = 'ndx_qqq_ratio'
+const ratio   = ref(props.nasIndex ? (parseFloat(localStorage.getItem(RATIO_KEY)) || 41.2) : 1)
+const ndxLive = ref(null)
+
+async function refreshRatio(qqqPrice) {
+  if (!props.nasIndex || !qqqPrice) return
+  const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?interval=1d&range=1d'
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
+  ]
+  for (const u of proxies) {
+    try {
+      const d = await cachedFetch(u, 60_000)
+      const px = d?.chart?.result?.[0]?.meta?.regularMarketPrice
+      if (px > 0) {
+        ratio.value = px / qqqPrice
+        ndxLive.value = px
+        try { localStorage.setItem(RATIO_KEY, String(ratio.value)) } catch { /* ignore */ }
+        return
+      }
+    } catch { /* 換下一個 proxy */ }
+  }
+}
+
 async function loadInterval(iv) {
   try {
-    const url = `${TWELVE}/time_series?symbol=${SYMBOL}&interval=${iv.key}&outputsize=300&apikey=${TWELVE_KEY}`
+    const url = `${TWELVE}/time_series?symbol=${props.symbol}&interval=${iv.key}&outputsize=300&apikey=${TWELVE_KEY}`
     const data = await cachedFetch(url, iv.ttl)
 
     if (data.status === 'error' || !data.values?.length) {
@@ -37,13 +72,14 @@ async function loadInterval(iv) {
       return
     }
 
+    const r = ratio.value
     const candles = data.values
       .map(v => ({
         time:   Math.floor(new Date(v.datetime.replace(' ', 'T')).getTime() / 1000),
-        open:   parseFloat(v.open),
-        high:   parseFloat(v.high),
-        low:    parseFloat(v.low),
-        close:  parseFloat(v.close),
+        open:   parseFloat(v.open)  * r,
+        high:   parseFloat(v.high)  * r,
+        low:    parseFloat(v.low)   * r,
+        close:  parseFloat(v.close) * r,
         volume: v.volume != null ? parseFloat(v.volume) : null,
       }))
       .filter(c => c.open && c.high && c.low && c.close)
@@ -72,14 +108,15 @@ async function loadAll() {
   error.value = ''
 
   try {
-    const q = await cachedFetch(`${FINNHUB}/quote?symbol=${SYMBOL}&token=${FINNHUB_KEY}`, 60_000)
+    const q = await cachedFetch(`${FINNHUB}/quote?symbol=${props.symbol}&token=${FINNHUB_KEY}`, 60_000)
     if (q.c) quote.value = q
   } catch { /* 報價失敗不影響分線 */ }
 
+  await refreshRatio(quote.value?.c)
   await Promise.allSettled(INTERVALS.map(iv => loadInterval(iv)))
 
   const anyOk = INTERVALS.some(iv => tf.value[iv.key]?.candles?.length)
-  if (!anyOk) error.value = 'NAS100 資料載入失敗，請稍後再試（免費 API 每分鐘 8 次限制）。'
+  if (!anyOk) error.value = `${props.symbol} 分線資料載入失敗，請稍後再試（免費 API 每分鐘 8 次限制）。`
   else lastUpdate.value = new Date()
 
   loading.value = false
@@ -96,6 +133,26 @@ onUnmounted(() => clearInterval(timer))
 function isNeutral(p) {
   return Math.abs(p.upProb - 50) < NEUTRAL_MARGIN
 }
+
+// 價位顯示：NAS100 = 指數點位（1 位小數、千分位），個股 = $xx.xx
+function fmtP(v) {
+  if (v == null) return '—'
+  return props.nasIndex
+    ? Number(v).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+    : '$' + Number(v).toFixed(2)
+}
+
+const headerPrice = computed(() => {
+  if (!quote.value) return null
+  return props.nasIndex
+    ? fmtP(ndxLive.value ?? quote.value.c * ratio.value)
+    : fmtP(quote.value.c)
+})
+const headerChange = computed(() => {
+  if (!quote.value?.d) return '0.00'
+  const d = Math.abs(quote.value.d) * (props.nasIndex ? ratio.value : 1)
+  return props.nasIndex ? d.toFixed(1) : d.toFixed(2)
+})
 
 const summary = computed(() =>
   INTERVALS.map(iv => ({ ...iv, d: tf.value[iv.key] ?? null }))
@@ -146,16 +203,16 @@ function dirColor(p) {
       <div class="flex items-center justify-between">
         <div>
           <div class="flex items-center gap-2">
-            <span class="text-white text-lg font-bold">NAS100 當日預測</span>
-            <span class="text-gray-600 text-[10px] bg-gray-800/80 px-1.5 py-0.5 rounded">QQQ 追蹤</span>
+            <span class="text-white text-lg font-bold">{{ title || (symbol + ' 分線預測') }}</span>
+            <span v-if="badge" class="text-gray-600 text-[10px] bg-gray-800/80 px-1.5 py-0.5 rounded">{{ badge }}</span>
           </div>
-          <p class="text-gray-600 text-xs mt-1">那斯達克 100 · 六時間框架技術面回測</p>
+          <p class="text-gray-600 text-xs mt-1">{{ subtitle }}</p>
         </div>
         <div class="text-right">
           <template v-if="quote">
-            <p class="text-white text-2xl font-black tracking-tight">${{ quote.c.toFixed(2) }}</p>
+            <p class="text-white text-2xl font-black tracking-tight">{{ headerPrice }}</p>
             <p class="text-sm font-semibold" :class="quoteUp ? 'text-emerald-400' : 'text-red-400'">
-              {{ quoteUp ? '▲ +' : '▼ ' }}{{ quote.d?.toFixed(2) }}（{{ quote.dp?.toFixed(2) }}%）
+              {{ quoteUp ? '▲ +' : '▼ -' }}{{ headerChange }}（{{ Math.abs(quote.dp ?? 0).toFixed(2) }}%）
             </p>
           </template>
           <button
@@ -314,19 +371,19 @@ function dirColor(p) {
           <div class="bg-[#121420] rounded-xl p-3 text-center">
             <p class="text-gray-600 text-[10px] mb-1">{{ cur.prediction.bullish ? '進場（買）' : '進場（空）' }}</p>
             <p class="text-white text-base font-bold">
-              ${{ cur.prediction.bullish ? cur.prediction.dayTrade.long.buy : cur.prediction.dayTrade.short.sell }}
+              {{ fmtP(cur.prediction.bullish ? cur.prediction.dayTrade.long.buy : cur.prediction.dayTrade.short.sell) }}
             </p>
           </div>
           <div class="bg-[#121420] rounded-xl p-3 text-center">
             <p class="text-gray-600 text-[10px] mb-1">目標</p>
             <p class="text-base font-bold" :class="dirColor(cur.prediction)">
-              ${{ cur.prediction.bullish ? cur.prediction.dayTrade.long.sell : cur.prediction.dayTrade.short.cover }}
+              {{ fmtP(cur.prediction.bullish ? cur.prediction.dayTrade.long.sell : cur.prediction.dayTrade.short.cover) }}
             </p>
           </div>
           <div class="bg-[#121420] rounded-xl p-3 text-center">
             <p class="text-gray-600 text-[10px] mb-1">停損</p>
             <p class="text-red-400 text-base font-bold">
-              ${{ cur.prediction.bullish ? cur.prediction.dayTrade.long.stop : cur.prediction.dayTrade.short.stop }}
+              {{ fmtP(cur.prediction.bullish ? cur.prediction.dayTrade.long.stop : cur.prediction.dayTrade.short.stop) }}
             </p>
           </div>
         </div>
@@ -363,12 +420,18 @@ function dirColor(p) {
     </template>
 
     <div v-else-if="loading" class="bg-[#1a1d27] border border-gray-800 rounded-xl p-10 text-center text-gray-500 text-sm">
-      NAS100 分線資料載入中...
+      分線資料載入中...
     </div>
 
     <p class="text-gray-700 text-[10px] text-center leading-relaxed">
-      NAS100 以 QQQ ETF 分線資料回測（走勢與那斯達克 100 指數同步）。<br/>
-      預測為歷史技術面統計，僅供參考，不構成投資建議。
+      <template v-if="nasIndex">
+        訊號以 QQQ 分線計算（與那斯達克 100 指數走勢同步），價位已換算為指數點位（比率 {{ ratio.toFixed(2) }}）。<br/>
+        與 Plus500 US 100 Cash CFD 報價可能有數點基差，下單前請對照盤面。
+      </template>
+      <template v-else>
+        分線預測為歷史技術面統計。實測命中率 &lt; 52% 的週期請勿照訊號下單。
+      </template>
+      僅供參考，不構成投資建議。
     </p>
 
   </div>

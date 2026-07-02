@@ -7,7 +7,7 @@ import NewsPanel        from './components/NewsPanel.vue'
 import ReasoningPanel   from './components/ReasoningPanel.vue'
 import ChickenOracle    from './components/ChickenOracle.vue'
 import ActionCard       from './components/ActionCard.vue'
-import Nas100Panel      from './components/Nas100Panel.vue'
+import IntradayPanel    from './components/IntradayPanel.vue'
 import { computeTASeries, scoreStock, predictToday, walkForwardHitRate } from './utils/technical.js'
 import { cachedFetch } from './utils/apiCache.js'
 import { translateNewsItems } from './utils/translate.js'
@@ -31,6 +31,7 @@ const taData     = ref(null)
 const prediction = ref(null)
 const hitRate    = ref(null)
 const newsData   = ref([])
+const showIntraday = ref(false)   // 個股分線面板（點擊才載入）
 
 const MARKETS = {
   US:  { label: '🇺🇸 美股', currency: '$',  exchange: '',     placeholder: '例如 AAPL、TSLA' },
@@ -72,6 +73,7 @@ async function search() {
   prediction.value = null
   hitRate.value    = null
   newsData.value   = []
+  showIntraday.value = false
 
   const mkt = MARKETS[market.value]
   const cur = mkt.currency
@@ -276,7 +278,15 @@ function fmt(n) {
       </div>
 
       <!-- ⚡ NAS100 分頁（首次點擊才掛載，之後保留狀態） -->
-      <Nas100Panel v-if="nasVisited" v-show="activeTab === 'nas100'" />
+      <IntradayPanel
+        v-if="nasVisited"
+        v-show="activeTab === 'nas100'"
+        symbol="QQQ"
+        nas-index
+        title="NAS100 當日預測"
+        badge="US 100 Cash CFD 點位"
+        subtitle="那斯達克 100 指數 · 六時間框架技術面回測"
+      />
 
       <div v-show="activeTab === 'stock'">
 
@@ -427,6 +437,22 @@ function fmt(n) {
             :prediction="prediction"
             :result="result"
             :newsItems="newsData"
+          />
+
+          <!-- ⚡ 個股分線當沖預測（點擊才載入，省 API 額度） -->
+          <button
+            v-if="market === 'US' && !showIntraday"
+            @click="showIntraday = true"
+            class="w-full bg-[#1a1d27] border border-blue-800/50 hover:border-blue-500 text-blue-400 text-sm font-semibold px-4 py-3 rounded-xl transition-colors cursor-pointer"
+          >
+            ⚡ 載入 {{ result.symbol }} 分線當沖預測（1分～4小時 · 含實測命中率）
+          </button>
+          <IntradayPanel
+            v-if="showIntraday"
+            :key="result.symbol"
+            :symbol="result.symbol"
+            :title="result.symbol + ' 分線當沖預測'"
+            subtitle="六時間框架 · 下一根 K 棒方向回測 · 晚上當沖用"
           />
 
           <!-- 🧠 推理引擎 -->
