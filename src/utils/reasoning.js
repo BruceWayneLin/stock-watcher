@@ -16,6 +16,10 @@ const BULLISH_KW = [
   'bull', 'positive', 'best', 'rise', 'up', 'above',
 ]
 
+// 單字邊界匹配，避免 'up' 誤配 'update'、'low' 誤配 'below'
+const BEARISH_RE = BEARISH_KW.map(kw => new RegExp(`\\b${kw}\\b`, 'i'))
+const BULLISH_RE = BULLISH_KW.map(kw => new RegExp(`\\b${kw}\\b`, 'i'))
+
 export function analyzeNewsSentiment(newsItems) {
   if (!newsItems || !newsItems.length) {
     return { score: 0, total: 0, bullishCount: 0, bearishCount: 0, neutralCount: 0, highlights: [] }
@@ -27,14 +31,18 @@ export function analyzeNewsSentiment(newsItems) {
   const highlights = []
 
   for (const item of newsItems) {
-    const text = ((item.headline || '') + ' ' + (item.summary || '')).toLowerCase()
+    const headline = item.headline || ''
+    const summary  = item.summary || ''
     let bull = 0, bear = 0
 
-    for (const kw of BULLISH_KW) {
-      if (text.includes(kw)) bull++
+    // 標題權重 ×2（標題比內文更能代表新聞方向）
+    for (const re of BULLISH_RE) {
+      if (re.test(headline)) bull += 2
+      else if (re.test(summary)) bull++
     }
-    for (const kw of BEARISH_KW) {
-      if (text.includes(kw)) bear++
+    for (const re of BEARISH_RE) {
+      if (re.test(headline)) bear += 2
+      else if (re.test(summary)) bear++
     }
 
     if (bull > bear) {

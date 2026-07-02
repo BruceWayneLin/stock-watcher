@@ -7,19 +7,19 @@ import NewsPanel        from './components/NewsPanel.vue'
 import ReasoningPanel   from './components/ReasoningPanel.vue'
 import ChickenOracle    from './components/ChickenOracle.vue'
 import ActionCard       from './components/ActionCard.vue'
-import { computeTASeries, scoreStock, predictToday } from './utils/technical.js'
+import Nas100Panel      from './components/Nas100Panel.vue'
+import { computeTASeries, scoreStock, predictToday, walkForwardHitRate } from './utils/technical.js'
 import { cachedFetch } from './utils/apiCache.js'
 import { translateNewsItems } from './utils/translate.js'
+import { FINNHUB, FINNHUB_KEY, TWELVE, TWELVE_KEY } from './utils/config.js'
 
-// =============================================
-//  API Keys
-// =============================================
-const FINNHUB_KEY = 'd72fcm1r01qqkte0p75gd72fcm1r01qqkte0p760'
-const TWELVE_KEY  = '5d7d4665dc2e4a3297213c1aaa4439bc'
-// =============================================
-
-const FINNHUB = 'https://finnhub.io/api/v1'
-const TWELVE  = 'https://api.twelvedata.com'
+// ── 頂層分頁 ──
+const activeTab  = ref('stock')       // 'stock' | 'nas100'
+const nasVisited = ref(false)         // 首次切換才載入 NAS100（省 API 次數）
+function switchTab(tab) {
+  activeTab.value = tab
+  if (tab === 'nas100') nasVisited.value = true
+}
 
 const symbol     = ref('')
 const market     = ref('US')
@@ -29,6 +29,7 @@ const result     = ref(null)
 const candleData = ref([])
 const taData     = ref(null)
 const prediction = ref(null)
+const hitRate    = ref(null)
 const newsData   = ref([])
 
 const MARKETS = {
@@ -69,6 +70,7 @@ async function search() {
   candleData.value = []
   taData.value     = null
   prediction.value = null
+  hitRate.value    = null
   newsData.value   = []
 
   const mkt = MARKETS[market.value]
@@ -152,32 +154,49 @@ async function search() {
 
 async function loadCandles(sym) {
   try {
-    const url = `${TWELVE}/time_series?symbol=${twelveSymbol(sym)}&interval=1day&outputsize=130&apikey=${TWELVE_KEY}`
+    // 400 個交易日：相似樣本更多、回測基礎更穩（圖表只顯示最近 130 根）
+    const url = `${TWELVE}/time_series?symbol=${twelveSymbol(sym)}&interval=1day&outputsize=400&apikey=${TWELVE_KEY}`
     const data = await cachedFetch(url)
 
     if (data.status === 'error' || !data.values?.length) return
 
     const candles = data.values
       .map(v => ({
-        time:  Math.floor(new Date(v.datetime).getTime() / 1000),
-        open:  parseFloat(v.open),
-        high:  parseFloat(v.high),
-        low:   parseFloat(v.low),
-        close: parseFloat(v.close),
+        time:   Math.floor(new Date(v.datetime).getTime() / 1000),
+        open:   parseFloat(v.open),
+        high:   parseFloat(v.high),
+        low:    parseFloat(v.low),
+        close:  parseFloat(v.close),
+        volume: v.volume != null ? parseFloat(v.volume) : null,
       }))
       .filter(c => c.open && c.high && c.low && c.close)
       .reverse()
 
-    candleData.value = candles
+    // 圖表只畫最近 130 根（約 6 個月），指標與預測用全部歷史
+    candleData.value = candles.slice(-130)
 
     if (candles.length >= 30) {
       const series = computeTASeries(candles)
       const score  = scoreStock(candles.map(c => c.close))
-      taData.value = { ...series, ...(score ?? {}) }
+      const t0 = candleData.value[0].time
+      const clip = arr => (arr ?? []).filter(pt => pt.time >= t0)
+      taData.value = {
+        ...series,
+        ma10Series: clip(series.ma10Series),
+        ma20Series: clip(series.ma20Series),
+        ma50Series: clip(series.ma50Series),
+        rsiSeries: clip(series.rsiSeries),
+        macdSeries: clip(series.macdSeries),
+        signalSeries: clip(series.signalSeries),
+        histSeries: clip(series.histSeries),
+        ...(score ?? {}),
+      }
     }
 
     if (candles.length >= 60) {
       prediction.value = predictToday(candles)
+      // 實測命中率：對最近 120 個交易日 walk-forward 對答案
+      hitRate.value = walkForwardHitRate(candles, { evalBars: 120 })
     }
   } catch {
     // K 線失敗不影響報價顯示
@@ -234,6 +253,33 @@ function fmt(n) {
 
       <!-- 🐣 小雞占卜（已關閉） -->
 
+      <!-- 頂層分頁 -->
+      <div class="flex gap-2 mb-5">
+        <button
+          @click="switchTab('stock')"
+          class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
+          :class="activeTab === 'stock'
+            ? 'bg-blue-500 text-white'
+            : 'bg-[#1a1d27] text-gray-500 border border-gray-800 hover:text-gray-300'"
+        >
+          🔍 個股分析
+        </button>
+        <button
+          @click="switchTab('nas100')"
+          class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
+          :class="activeTab === 'nas100'
+            ? 'bg-blue-500 text-white'
+            : 'bg-[#1a1d27] text-gray-500 border border-gray-800 hover:text-gray-300'"
+        >
+          ⚡ NAS100 當日
+        </button>
+      </div>
+
+      <!-- ⚡ NAS100 分頁（首次點擊才掛載，之後保留狀態） -->
+      <Nas100Panel v-if="nasVisited" v-show="activeTab === 'nas100'" />
+
+      <div v-show="activeTab === 'stock'">
+
       <!-- 技術分析說明 -->
       <details class="mb-6 bg-[#1a1d27] border border-gray-800 rounded-xl overflow-hidden">
         <summary class="px-4 py-3 text-gray-400 text-xs font-semibold cursor-pointer hover:text-gray-300 transition-colors select-none flex items-center gap-2">
@@ -245,7 +291,8 @@ function fmt(n) {
           <!-- 小雞預測 -->
           <p class="text-blue-400 text-xs font-semibold mt-3 mb-2">🐔 小雞預測（漲跌機率）</p>
           <p class="text-gray-500 text-[11px] mb-2 leading-relaxed">
-            從半年歷史日線中，找出技術面相似度 ≥ 70% 的交易日，以加權統計隔天漲跌比例得出機率。
+            從半年歷史日線中，以「特徵加權相似度」找出技術面相似的交易日（門檻 85% 起自適應放寬至 70%），
+            樣本權重 = 相似度² × 時間衰減（越近的歷史越重要），再經貝氏收縮修正小樣本偏差，統計隔天漲跌機率。
           </p>
           <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-4">
             <div class="flex justify-between"><span class="text-gray-500">MA10 / MA20 / MA50</span><span class="text-gray-400">趨勢方向判斷</span></div>
@@ -395,7 +442,7 @@ function fmt(n) {
           <NewsPanel v-if="newsData.length" :news="newsData" :symbol="result.symbol" />
 
           <!-- 🐔 小雞預測 -->
-          <PredictionPanel v-if="prediction" :prediction="prediction" :currency="result.currency" />
+          <PredictionPanel v-if="prediction" :prediction="prediction" :currency="result.currency" :hitRate="hitRate" />
 
           <!-- K 線圖 -->
           <div v-if="candleData.length" class="bg-[#1a1d27] border border-gray-800 rounded-xl p-6">
@@ -422,6 +469,8 @@ function fmt(n) {
 
         </div>
       </Transition>
+
+      </div><!-- /個股分析分頁 -->
 
     </div>
   </div>

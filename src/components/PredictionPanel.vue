@@ -4,6 +4,7 @@ import { computed } from 'vue'
 const props = defineProps({
   prediction: { type: Object, required: true },
   currency:   { type: String, default: '$' },
+  hitRate:    { type: Object, default: null },  // walk-forward 實測命中率
 })
 
 const mainProb = computed(() =>
@@ -39,6 +40,24 @@ const confColor = computed(() => {
         歷史相似天數：{{ prediction.samples }} 天
       </span>
     </div>
+
+    <!-- 📏 實測命中率（walk-forward 對答案，最誠實的可靠度指標）-->
+    <div v-if="hitRate" class="mb-5 rounded-lg px-3 py-2.5 border flex items-center justify-between" :class="[
+      hitRate.rate >= 58 ? 'bg-emerald-950/30 border-emerald-800/40' :
+      hitRate.rate >= 52 ? 'bg-yellow-950/20 border-yellow-800/30' : 'bg-red-950/30 border-red-800/40'
+    ]">
+      <span class="text-gray-400 text-xs">
+        📏 此股近 {{ hitRate.total }} 個交易日實測命中率
+        <span v-if="hitRate.gatedRate != null" class="text-gray-600">（強訊號 {{ hitRate.gatedRate }}%，{{ hitRate.gatedTotal }} 筆）</span>
+      </span>
+      <span class="text-lg font-black" :class="[
+        hitRate.rate >= 58 ? 'text-emerald-400' :
+        hitRate.rate >= 52 ? 'text-yellow-400' : 'text-red-400'
+      ]">{{ hitRate.rate }}%</span>
+    </div>
+    <p v-if="hitRate && hitRate.rate < 52" class="text-red-400/90 text-[11px] -mt-3 mb-5">
+      ⚠ 這支股票近期的方向預測實測不到 52%（≈ 丟銅板），機率數字僅供參考，請以價位區間與停損管理為主。
+    </p>
 
     <!-- Main Prediction Ring -->
     <div class="flex justify-center mb-6">

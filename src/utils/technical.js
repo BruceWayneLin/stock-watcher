@@ -241,113 +241,237 @@ function detectCandlePatterns(candles) {
   return patterns
 }
 
-// ── 🐔 小雞預測引擎 ──────────────────────────────────
-// 用歷史回測法預測當日漲跌機率
-// 在歷史資料中找出技術面狀態相似的日子，統計隔天漲跌比例
+// ── 🐔 小雞預測引擎 v2 ────────────────────────────────
+// 歷史相似度回測，v2 改進：
+//  1. 全部指標序列一次算完（O(n)），不再對每個歷史日重算切片
+//  2. 特徵加權相似度：重要特徵（RSI/布林/動量）權重較高
+//  3. 動量改連續值（以近期波動度標準化），不再只看正負
+//  4. 新增波動度狀態、成交量比兩個特徵
+//  5. 樣本權重 = 相似度² × 時間衰減（越近的歷史越有參考性）
+//  6. 自適應相似度門檻：先用嚴格門檻，樣本不足才放寬
+//  7. 機率經貝氏收縮（依有效樣本數往 50% 收），避免小樣本過度自信
 
-function getSignalVector(closes, idx) {
-  // 至少需要 50 筆之前的資料
-  if (idx < 50) return null
-
-  const slice = closes.slice(0, idx + 1)
-  const last  = slice[slice.length - 1]
-
-  const ma10arr = sma(slice, 10)
-  const ma20arr = sma(slice, 20)
-  const ma50arr = sma(slice, 50)
-  const ma10 = ma10arr[ma10arr.length - 1]
-  const ma20 = ma20arr[ma20arr.length - 1]
-  const ma50 = ma50arr[ma50arr.length - 1]
-
-  if (!ma10 || !ma20 || !ma50) return null
-
-  const rsiVal  = rsi(slice)
-  const macdVal = macd(slice)
-  if (rsiVal === null || !macdVal.value) return null
-
-  const bb = bollingerBands(slice, 20, 2)
-  const bbUpper = bb.upper[bb.upper.length - 1]
-  const bbLower = bb.lower[bb.lower.length - 1]
-  const bbMid   = bb.mid[bb.mid.length - 1]
-
-  // 3 日與 5 日動量
-  const mom3 = idx >= 3 ? (last - closes[idx - 3]) / closes[idx - 3] : 0
-  const mom5 = idx >= 5 ? (last - closes[idx - 5]) / closes[idx - 5] : 0
-
-  // 布林位置 0~1（0=下軌, 1=上軌）
-  const bbPos = bbUpper !== bbLower ? (last - bbLower) / (bbUpper - bbLower) : 0.5
-
-  return {
-    ma10_above_ma20: ma10 > ma20 ? 1 : 0,
-    ma20_above_ma50: ma20 > ma50 ? 1 : 0,
-    price_above_ma20: last > ma20 ? 1 : 0,
-    price_above_ma50: last > ma50 ? 1 : 0,
-    rsi_norm: rsiVal / 100,           // 連續值 0~1（比 4 區間精準）
-    macd_bullish: macdVal.bullish ? 1 : 0,
-    macd_above_zero: macdVal.aboveZero ? 1 : 0,
-    bb_pos: bbPos,                     // 連續值 0~1（布林位置）
-    mom3_up: mom3 > 0 ? 1 : 0,
-    mom5_up: mom5 > 0 ? 1 : 0,
+function wilderRsiSeries(closes, period = 14) {
+  const out = new Array(closes.length).fill(null)
+  if (closes.length < period + 1) return out
+  let avgGain = 0, avgLoss = 0
+  for (let i = 1; i <= period; i++) {
+    const ch = closes[i] - closes[i - 1]
+    if (ch > 0) avgGain += ch; else avgLoss -= ch
   }
+  avgGain /= period; avgLoss /= period
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
+  for (let i = period + 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i - 1]
+    avgGain = (avgGain * (period - 1) + (ch > 0 ? ch : 0)) / period
+    avgLoss = (avgLoss * (period - 1) + (ch < 0 ? -ch : 0)) / period
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
+  }
+  return out
 }
 
-// 混合相似度：離散特徵用精確匹配，連續特徵用距離
-const _continuous = new Set(['rsi_norm', 'bb_pos'])
-
-function signalSimilarity(a, b) {
-  const keys = Object.keys(a)
-  let totalSim = 0
-  for (const k of keys) {
-    if (_continuous.has(k)) {
-      // RSI diff 10% → 0.75 相似，diff 40% → 0
-      totalSim += Math.max(0, 1 - Math.abs(a[k] - b[k]) * 2.5)
+function atrSeries(candles, period = 14) {
+  const n = candles.length
+  const out = new Array(n).fill(null)
+  if (n < 2) return out
+  let sum = 0, atrVal = null
+  for (let i = 1; i < n; i++) {
+    const c = candles[i], p = candles[i - 1]
+    const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close))
+    if (i <= period) {
+      sum += tr
+      if (i === period) { atrVal = sum / period; out[i] = atrVal }
     } else {
-      totalSim += a[k] === b[k] ? 1 : 0
+      atrVal = (atrVal * (period - 1) + tr) / period
+      out[i] = atrVal
     }
   }
-  return totalSim / keys.length
+  return out
 }
 
-export function predictToday(candles) {
-  const closes = candles.map(c => c.close)
-  if (closes.length < 60) return null
+function macdPair(closes) {
+  const emaF = ema(closes, 12)
+  const emaS = ema(closes, 26)
+  const macdLine = closes.map((_, i) =>
+    (emaF[i] !== null && emaS[i] !== null) ? emaF[i] - emaS[i] : null)
+  const firstValid = macdLine.findIndex(v => v !== null)
+  const signalLine = new Array(closes.length).fill(null)
+  if (firstValid >= 0) {
+    const sig = ema(macdLine.slice(firstValid), 9)
+    for (let i = firstValid; i < closes.length; i++) {
+      signalLine[i] = sig[i - firstValid] ?? null
+    }
+  }
+  return { macdLine, signalLine }
+}
 
-  const todayIdx = closes.length - 1
-  const todaySignals = getSignalVector(closes, todayIdx)
+// 近 period 根報酬率標準差（動量標準化用）
+function rollingRetStd(closes, period = 20) {
+  const n = closes.length
+  const out = new Array(n).fill(null)
+  for (let i = period; i < n; i++) {
+    let mean = 0
+    const rets = []
+    for (let j = i - period + 1; j <= i; j++) {
+      const r = (closes[j] - closes[j - 1]) / closes[j - 1]
+      rets.push(r); mean += r
+    }
+    mean /= period
+    out[i] = Math.sqrt(rets.reduce((s, v) => s + (v - mean) ** 2, 0) / period)
+  }
+  return out
+}
+
+// [特徵名, 權重, 連續距離係數（null = 離散精確匹配）]
+const FEATURES = [
+  ['ma10_gt_ma20',   1,    null],
+  ['ma20_gt_ma50',   1,    null],
+  ['price_gt_ma20',  1,    null],
+  ['price_gt_ma50',  1,    null],
+  ['rsi_norm',       1.5,  2.5],
+  ['macd_bullish',   1,    null],
+  ['macd_above_zero', 0.75, null],
+  ['macd_hist',      1,    2],
+  ['bb_pos',         1.5,  2.5],
+  ['mom3',           1.25, 2.2],
+  ['mom5',           1.25, 2.2],
+  ['vol_regime',     0.75, 2],
+  ['vol_ratio',      0.75, 2],
+]
+
+function similarity(a, b) {
+  let sim = 0, wsum = 0
+  for (const [key, w, k] of FEATURES) {
+    const av = a[key], bv = b[key]
+    if (av == null || bv == null) continue
+    wsum += w
+    sim += w * (k === null
+      ? (av === bv ? 1 : 0)
+      : Math.max(0, 1 - Math.abs(av - bv) * k))
+  }
+  return wsum ? sim / wsum : 0
+}
+
+function buildFeatureMatrix(candles) {
+  const n = candles.length
+  const closes = candles.map(c => c.close)
+  const volumes = candles.map(c => c.volume ?? null)
+  const hasVolume = volumes.filter(v => v != null && v > 0).length > n * 0.8
+
+  const ma10 = sma(closes, 10)
+  const ma20 = sma(closes, 20)
+  const ma50 = sma(closes, 50)
+  const rsiArr = wilderRsiSeries(closes)
+  const { macdLine, signalLine } = macdPair(closes)
+  const bb = bollingerBands(closes, 20, 2)
+  const atrArr = atrSeries(candles, 14)
+  const retStd = rollingRetStd(closes, 20)
+  const volSma = hasVolume ? sma(volumes.map(v => v ?? 0), 20) : null
+
+  // ATR 的 30 根平均（波動度狀態基準）
+  const atrAvg = new Array(n).fill(null)
+  for (let i = 43; i < n; i++) {
+    let s = 0
+    for (let j = i - 29; j <= i; j++) s += atrArr[j]
+    atrAvg[i] = s / 30
+  }
+
+  const clamp01 = v => Math.min(1, Math.max(0, v))
+  const squash = (v, scale) => clamp01(0.5 + 0.5 * Math.tanh(v / scale))
+
+  function vecAt(i) {
+    if (i < 50) return null
+    if (ma10[i] == null || ma20[i] == null || ma50[i] == null ||
+        rsiArr[i] == null || macdLine[i] == null || signalLine[i] == null ||
+        atrArr[i] == null || retStd[i] == null) return null
+
+    const price = closes[i]
+    const bbU = bb.upper[i], bbL = bb.lower[i]
+    const std = retStd[i] || 0.01
+    const mom3 = (price - closes[i - 3]) / closes[i - 3]
+    const mom5 = (price - closes[i - 5]) / closes[i - 5]
+
+    return {
+      ma10_gt_ma20:   ma10[i] > ma20[i] ? 1 : 0,
+      ma20_gt_ma50:   ma20[i] > ma50[i] ? 1 : 0,
+      price_gt_ma20:  price > ma20[i] ? 1 : 0,
+      price_gt_ma50:  price > ma50[i] ? 1 : 0,
+      rsi_norm:       rsiArr[i] / 100,
+      macd_bullish:   macdLine[i] > signalLine[i] ? 1 : 0,
+      macd_above_zero: macdLine[i] > 0 ? 1 : 0,
+      // MACD 柱狀圖以 ATR 標準化 → 動能「強度」也納入比對
+      macd_hist:      squash((macdLine[i] - signalLine[i]) / (atrArr[i] || price * 0.01), 1),
+      bb_pos:         bbU !== bbL ? clamp01((price - bbL) / (bbU - bbL)) : 0.5,
+      // 動量以近期波動度標準化 → 「漲 2% 在低波動股很強、在高波動股普通」
+      mom3:           squash(mom3, std * Math.sqrt(3) * 2),
+      mom5:           squash(mom5, std * Math.sqrt(5) * 2),
+      vol_regime:     atrAvg[i] ? clamp01(atrArr[i] / atrAvg[i] / 2) : null,
+      vol_ratio:      (volSma && volSma[i] > 0 && volumes[i] != null)
+                        ? clamp01(volumes[i] / volSma[i] / 2.5) : null,
+    }
+  }
+
+  return { vecAt }
+}
+
+export function predictToday(candles, opts = {}) {
+  const unit = opts.unit ?? '日'          // 個股日線 = '日'，分線 = '根K棒'
+  const minBars = opts.minBars ?? 60
+  const closes = candles.map(c => c.close)
+  const n = closes.length
+  if (n < minBars) return null
+
+  const todayIdx = n - 1
+  const { vecAt } = buildFeatureMatrix(candles)
+  const todaySignals = vecAt(todayIdx)
   if (!todaySignals) return null
 
-  // 回測：對歷史每一天計算相似度，統計隔天漲跌
-  let totalUp = 0, totalDown = 0
-  let weightedUp = 0, weightedDown = 0
-  const factors = { bullish: [], bearish: [] }
-  const nextDayReturns = []
-
+  // 對歷史每一根算相似度（指標已預算，這裡只是查表 + 距離）
+  const cands = []
   for (let i = 50; i < todayIdx; i++) {
-    const histSignals = getSignalVector(closes, i)
-    if (!histSignals) continue
+    const v = vecAt(i)
+    if (!v) continue
+    cands.push({
+      i,
+      sim: similarity(todaySignals, v),
+      ret: ((closes[i + 1] - closes[i]) / closes[i]) * 100,
+    })
+  }
 
-    const sim = signalSimilarity(todaySignals, histSignals)
-    if (sim < 0.75) continue  // 提高門檻：相似度 >= 75%
+  // 自適應門檻：優先用嚴格門檻，樣本不足才逐步放寬
+  const THRESHOLDS = [0.85, 0.8, 0.75, 0.7]
+  let matches = []
+  let thrUsed = THRESHOLDS[THRESHOLDS.length - 1]
+  for (const thr of THRESHOLDS) {
+    const m = cands.filter(c => c.sim >= thr)
+    if (m.length >= 25) { matches = m; thrUsed = thr; break }
+  }
+  if (!matches.length) matches = cands.filter(c => c.sim >= thrUsed)
+  if (matches.length < 5) return null  // 樣本太少不預測
 
-    const nextDayChange = closes[i + 1] - closes[i]
-    const nextDayPct = (nextDayChange / closes[i]) * 100
-    const weight = sim * sim  // 越相似權重越大
-    nextDayReturns.push(nextDayPct)
-
-    if (nextDayChange > 0) {
-      totalUp++
-      weightedUp += weight
-    } else {
-      totalDown++
-      weightedDown += weight
-    }
+  // 樣本權重 = 相似度² × 時間衰減（半衰期 60 根）
+  const HALF_LIFE = 60
+  let weightedUp = 0, totalWeight = 0, wSqSum = 0
+  let totalUp = 0, totalDown = 0
+  const nextDayReturns = []
+  for (const m of matches) {
+    const decay = Math.pow(0.5, (todayIdx - 1 - m.i) / HALF_LIFE)
+    const w = m.sim * m.sim * decay
+    totalWeight += w
+    wSqSum += w * w
+    nextDayReturns.push(m.ret)
+    if (m.ret > 0) { weightedUp += w; totalUp++ } else { totalDown++ }
   }
 
   const totalSamples = totalUp + totalDown
-  if (totalSamples < 5) return null  // 樣本太少不預測
+  const factors = { bullish: [], bearish: [] }
 
-  const totalWeight = weightedUp + weightedDown
-  const upProb  = Math.round((weightedUp / totalWeight) * 100)
+  // 有效樣本數（權重分佈越集中，有效樣本越少）＋ 貝氏收縮
+  const effN = (totalWeight * totalWeight) / wSqSum
+  const pRaw = weightedUp / totalWeight
+  const shrink = effN / (effN + 8)
+  let upProb = Math.round((0.5 + (pRaw - 0.5) * shrink) * 100)
+  upProb = Math.min(95, Math.max(5, upProb))
   const downProb = 100 - upProb
 
   // ── 歷史回報統計（精準度核心）──
@@ -372,16 +496,16 @@ export function predictToday(candles) {
   }
 
   // 分析看漲/看跌因素
-  if (todaySignals.ma10_above_ma20)   factors.bullish.push('MA10 在 MA20 上方（短期趨勢向上）')
+  if (todaySignals.ma10_gt_ma20)      factors.bullish.push('MA10 在 MA20 上方（短期趨勢向上）')
   else                                 factors.bearish.push('MA10 在 MA20 下方（短期趨勢向下）')
 
-  if (todaySignals.ma20_above_ma50)   factors.bullish.push('MA20 在 MA50 上方（中期趨勢向上）')
+  if (todaySignals.ma20_gt_ma50)      factors.bullish.push('MA20 在 MA50 上方（中期趨勢向上）')
   else                                 factors.bearish.push('MA20 在 MA50 下方（中期趨勢向下）')
 
-  if (todaySignals.price_above_ma20)  factors.bullish.push('股價站上 MA20')
+  if (todaySignals.price_gt_ma20)     factors.bullish.push('股價站上 MA20')
   else                                 factors.bearish.push('股價跌破 MA20')
 
-  if (todaySignals.price_above_ma50)  factors.bullish.push('股價站上 MA50')
+  if (todaySignals.price_gt_ma50)     factors.bullish.push('股價站上 MA50')
   else                                 factors.bearish.push('股價跌破 MA50')
 
   // RSI（連續值 → 更精準的判斷）
@@ -404,11 +528,23 @@ export function predictToday(candles) {
   else if (bbp >= 0.5)  factors.bullish.push('布林中上段')
   else                   factors.bearish.push('布林中下段')
 
-  if (todaySignals.mom3_up)            factors.bullish.push('近 3 日動量向上')
-  else                                  factors.bearish.push('近 3 日動量向下')
+  // 動量（連續值，0.5 = 持平；偏離越多力道越強）
+  if (todaySignals.mom3 > 0.58)        factors.bullish.push(`近 3 ${unit}動量向上`)
+  else if (todaySignals.mom3 < 0.42)   factors.bearish.push(`近 3 ${unit}動量向下`)
 
-  if (todaySignals.mom5_up)            factors.bullish.push('近 5 日動量向上')
-  else                                  factors.bearish.push('近 5 日動量向下')
+  if (todaySignals.mom5 > 0.58)        factors.bullish.push(`近 5 ${unit}動量向上`)
+  else if (todaySignals.mom5 < 0.42)   factors.bearish.push(`近 5 ${unit}動量向下`)
+
+  // 成交量（量價配合）
+  if (todaySignals.vol_ratio != null && todaySignals.vol_ratio > 0.6) {
+    if (closes[todayIdx] > closes[todayIdx - 1]) factors.bullish.push('價漲量增（買盤積極）')
+    else factors.bearish.push('價跌量增（賣壓沉重）')
+  }
+
+  // 波動度狀態（放大時訊號可靠度下降）
+  if (todaySignals.vol_regime != null && todaySignals.vol_regime > 0.75) {
+    factors.bearish.push('波動度明顯放大，追價風險升高')
+  }
 
   // ── K 線型態加入因素 ──
   const patterns = detectCandlePatterns(candles)
@@ -421,12 +557,17 @@ export function predictToday(candles) {
     }
   }
 
-  // 信心等級（含型態 + 勝率加成）
-  let confidence
+  // 信心等級：有效樣本數 + 機率幅度 + 加權/未加權方向一致性
+  const rawWinDir = (totalUp / totalSamples) >= 0.5
+  const weightedDir = pRaw >= 0.5
+  const dirAgree = rawWinDir === weightedDir  // 加權與未加權結論一致才可信
+  const margin = Math.abs(upProb - 50)
   const hasStrongPattern = patterns.some(p =>
     ['多頭吞噬', '空頭吞噬', '三紅兵', '三黑鴉', '跳空上漲', '跳空下跌'].includes(p.name))
-  if ((totalSamples >= 30 && Math.abs(upProb - 50) >= 15) || (totalSamples >= 20 && hasStrongPattern)) confidence = '高'
-  else if (totalSamples >= 15 || hasStrongPattern) confidence = '中'
+
+  let confidence
+  if (effN >= 20 && margin >= 12 && dirAgree) confidence = '高'
+  else if ((effN >= 10 && margin >= 6 && dirAgree) || (hasStrongPattern && effN >= 8)) confidence = '中'
   else confidence = '低'
 
   // 當沖交易建議
@@ -438,10 +579,44 @@ export function predictToday(candles) {
     bullish: upProb >= 50,
     factors,
     samples: totalSamples,
+    effSamples: Math.round(effN),
+    threshold: thrUsed,
     confidence,
     dayTrade,
     stats,
     patterns,
+    unit,
+  }
+}
+
+// ── 📏 Walk-forward 實測命中率 ────────────────────────
+// 對最近 evalBars 根，每根只用「當時看得到的歷史」做預測，再和下一根實際漲跌對答案。
+// 這是預測到底準不準的即時證據；rate < 52% 代表該標的/週期目前訊號 ≈ 雜訊。
+
+export function walkForwardHitRate(candles, opts = {}) {
+  const { unit = '日', evalBars = 80, neutralMargin = 8 } = opts
+  const start = Math.max(120, candles.length - evalBars)
+  if (candles.length - 1 <= start) return null
+
+  let hits = 0, total = 0, gatedHits = 0, gatedTotal = 0
+  for (let t = start; t < candles.length - 1; t++) {
+    const p = predictToday(candles.slice(0, t + 1), { unit, minBars: 60 })
+    if (!p) continue
+    const hit = (p.upProb >= 50) === (candles[t + 1].close > candles[t].close)
+    total++
+    if (hit) hits++
+    if (Math.abs(p.upProb - 50) >= neutralMargin) {
+      gatedTotal++
+      if (hit) gatedHits++
+    }
+  }
+  if (total < 20) return null
+
+  return {
+    rate: Math.round((hits / total) * 100),
+    total,
+    gatedRate: gatedTotal >= 10 ? Math.round((gatedHits / gatedTotal) * 100) : null,
+    gatedTotal,
   }
 }
 
